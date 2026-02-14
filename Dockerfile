@@ -12,6 +12,7 @@ RUN cargo build --release --locked && \
 FROM gcr.io/distroless/cc-debian12
 
 COPY --from=builder /app/target/release/zeroclaw /usr/local/bin/zeroclaw
+COPY LICENSE /usr/local/share/licenses/zeroclaw/LICENSE
 
 # Default workspace
 VOLUME ["/workspace"]

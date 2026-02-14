@@ -1,18 +1,10 @@
-# Build only needs Cargo.toml, Cargo.lock, and src/
-.git
-.github
-.githooks
-.plans
-target
-docs
-examples
-tests
-*.md
-*.png
-*.db
-*.db-journal
-*.toml.bak
-.DS_Store
-.tmp_todo_probe
-deny.toml
-LICENSE
+# Whitelist: ignore everything, then allow only what the build needs.
+*
+
+# Build inputs
+!Cargo.toml
+!Cargo.lock
+!src/
+
+# Legal — copied into the image by the Dockerfile
+!LICENSE
