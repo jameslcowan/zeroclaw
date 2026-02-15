@@ -1702,7 +1702,6 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     verify_token: verify_token.trim().to_string(),
                     app_secret: None, // Can be set via ZEROCLAW_WHATSAPP_APP_SECRET env var
                     allowed_numbers,
-                    app_secret: None, // Can be set via ZEROCLAW_WHATSAPP_APP_SECRET env var
                 });
             }
             6 => {
