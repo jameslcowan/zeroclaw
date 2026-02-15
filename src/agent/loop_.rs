@@ -1,10 +1,11 @@
+use crate::agent::tool_calls::{execute_tool_call, format_tool_result, parse_tool_calls, MAX_TOOL_ITERATIONS};
 use crate::config::Config;
 use crate::memory::{self, Memory, MemoryCategory};
 use crate::observability::{self, Observer, ObserverEvent};
 use crate::providers::{self, Provider};
 use crate::runtime;
 use crate::security::SecurityPolicy;
-use crate::tools;
+use crate::tools::{self, Tool};
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use std::fmt::Write;
@@ -27,6 +28,66 @@ async fn build_context(mem: &dyn Memory, user_msg: &str) -> String {
     }
 
     context
+}
+
+/// Handle LLM response with tool calling loop
+///
+/// This function parses tool calls from the LLM response, executes them,
+/// and feeds the results back to the LLM until it provides a final answer.
+async fn handle_response_with_tools(
+    provider: &dyn Provider,
+    system_prompt: &str,
+    message: &str,
+    model: &str,
+    temperature: f64,
+    tools: &[Box<dyn Tool>],
+) -> Result<String> {
+    let mut current_message = message.to_string();
+    let mut iteration = 0;
+    let mut full_response = String::new();
+
+    loop {
+        if iteration >= MAX_TOOL_ITERATIONS {
+            tracing::warn!("Tool calling exceeded maximum iterations ({MAX_TOOL_ITERATIONS})");
+            break;
+        }
+
+        let response = provider
+            .chat_with_system(Some(system_prompt), &current_message, model, temperature)
+            .await?;
+
+        // Check if response contains tool calls
+        let tool_calls = parse_tool_calls(&response);
+
+        if tool_calls.is_empty() {
+            // No tool calls, this is the final response
+            full_response = response;
+            break;
+        }
+
+        // Execute tool calls
+        println!("\n🔧 Executing {} tool call(s)...", tool_calls.len());
+        let mut tool_results = Vec::new();
+
+        for tool_call in &tool_calls {
+            println!("  → {} with args: {}", tool_call.name, tool_call.arguments);
+            let result = execute_tool_call(tool_call, tools).await;
+            let formatted = format_tool_result(tool_call, &result);
+            println!("  ← {}", formatted);
+            tool_results.push(formatted);
+        }
+
+        // Build next message with tool results
+        current_message = format!(
+            "Previous message: {}\n\nTool execution results:\n{}\n\nPlease continue based on these tool results.",
+            message,
+            tool_results.join("\n\n")
+        );
+
+        iteration += 1;
+    }
+
+    Ok(full_response)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -60,7 +121,7 @@ pub async fn run(
     } else {
         None
     };
-    let _tools = tools::all_tools(&security, mem.clone(), composio_key, &config.browser);
+    let tools = tools::all_tools(&security, mem.clone(), composio_key, &config.browser);
 
     // ── Resolve provider ─────────────────────────────────────────
     let provider_name = provider_override
@@ -150,9 +211,15 @@ pub async fn run(
             format!("{context}{msg}")
         };
 
-        let response = provider
-            .chat_with_system(Some(&system_prompt), &enriched, model_name, temperature)
-            .await?;
+        let response = handle_response_with_tools(
+            provider.as_ref(),
+            &system_prompt,
+            &enriched,
+            model_name,
+            temperature,
+            &tools,
+        )
+        .await?;
         println!("{response}");
 
         // Auto-save assistant response to daily log
@@ -190,9 +257,15 @@ pub async fn run(
                 format!("{context}{}", msg.content)
             };
 
-            let response = provider
-                .chat_with_system(Some(&system_prompt), &enriched, model_name, temperature)
-                .await?;
+            let response = handle_response_with_tools(
+                provider.as_ref(),
+                &system_prompt,
+                &enriched,
+                model_name,
+                temperature,
+                &tools,
+            )
+            .await?;
             println!("\n{response}\n");
 
             if config.memory.auto_save {
