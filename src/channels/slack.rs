@@ -66,10 +66,24 @@ impl Channel for SlackChannel {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let err = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Slack chat.postMessage failed ({status}): {err}");
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
+
+        if !status.is_success() {
+            anyhow::bail!("Slack chat.postMessage failed ({status}): {body}");
+        }
+
+        // Slack returns 200 for most app-level errors; check JSON "ok" field
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+        if parsed.get("ok") == Some(&serde_json::Value::Bool(false)) {
+            let err = parsed
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("unknown");
+            anyhow::bail!("Slack chat.postMessage failed: {err}");
         }
 
         Ok(())

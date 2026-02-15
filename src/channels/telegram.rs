@@ -385,7 +385,10 @@ impl Channel for TelegramChannel {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let err = resp.text().await.unwrap_or_default();
+            let err = resp
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
             anyhow::bail!("Telegram sendMessage failed ({status}): {err}");
         }
 
