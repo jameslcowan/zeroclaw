@@ -7,15 +7,23 @@ fn is_non_retryable(err: &anyhow::Error) -> bool {
     // Check for reqwest status errors (returned by .error_for_status())
     if let Some(reqwest_err) = err.downcast_ref::<reqwest::Error>() {
         if let Some(status) = reqwest_err.status() {
-            // 4xx client errors (except 429 Too Many Requests) are non-retryable
-            return status.is_client_error() && status.as_u16() != 429;
+            let code = status.as_u16();
+            // 4xx client errors are non-retryable, except:
+            // - 429 Too Many Requests (rate limiting, transient)
+            // - 408 Request Timeout (transient)
+            return status.is_client_error() && code != 429 && code != 408;
         }
     }
-    // Check error message for common non-retryable patterns
+    // String fallback: scan for any 4xx status code in error message
     let msg = err.to_string();
-    msg.contains("401 Unauthorized")
-        || msg.contains("403 Forbidden")
-        || msg.contains("404 Not Found")
+    for word in msg.split(|c: char| !c.is_ascii_digit()) {
+        if let Ok(code) = word.parse::<u16>() {
+            if (400..500).contains(&code) {
+                return code != 429 && code != 408;
+            }
+        }
+    }
+    false
 }
 
 /// Provider wrapper with retry + fallback behavior.
@@ -264,9 +272,26 @@ mod tests {
 
     #[test]
     fn non_retryable_detects_common_patterns() {
+        // Non-retryable 4xx errors
+        assert!(is_non_retryable(&anyhow::anyhow!("400 Bad Request")));
         assert!(is_non_retryable(&anyhow::anyhow!("401 Unauthorized")));
         assert!(is_non_retryable(&anyhow::anyhow!("403 Forbidden")));
         assert!(is_non_retryable(&anyhow::anyhow!("404 Not Found")));
+        assert!(is_non_retryable(&anyhow::anyhow!(
+            "API error with 400 Bad Request"
+        )));
+        // Retryable: 429 Too Many Requests
+        assert!(!is_non_retryable(&anyhow::anyhow!(
+            "429 Too Many Requests"
+        )));
+        // Retryable: 408 Request Timeout
+        assert!(!is_non_retryable(&anyhow::anyhow!("408 Request Timeout")));
+        // Retryable: 5xx server errors
+        assert!(!is_non_retryable(&anyhow::anyhow!(
+            "500 Internal Server Error"
+        )));
+        assert!(!is_non_retryable(&anyhow::anyhow!("502 Bad Gateway")));
+        // Retryable: transient errors
         assert!(!is_non_retryable(&anyhow::anyhow!("timeout")));
         assert!(!is_non_retryable(&anyhow::anyhow!("connection reset")));
     }
