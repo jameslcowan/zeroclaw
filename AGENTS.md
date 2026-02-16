@@ -3,6 +3,8 @@
 This file defines the default working protocol for coding agents in this repository.
 Scope: entire repository.
 
+**Note for Claude Code users**: See [CLAUDE.md](CLAUDE.md) for project-specific workflow commands, architecture patterns, and productivity shortcuts optimized for rapid development.
+
 ## 1) Project Snapshot (Read First)
 
 ZeroClaw is a Rust-first autonomous agent runtime optimized for:

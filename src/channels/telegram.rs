@@ -598,7 +598,7 @@ Allowlist Telegram @username or numeric user ID, then run `zeroclaw onboard --ch
 
                     let msg = ChannelMessage {
                         id: format!("telegram_{chat_id}_{message_id}"),
-                        sender: username.to_string(),
+                        sender: chat_id.clone(),
                         content: text.to_string(),
                         channel: "telegram".to_string(),
                         timestamp: std::time::SystemTime::now()
