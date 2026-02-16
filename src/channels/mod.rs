@@ -23,9 +23,10 @@ pub use whatsapp::WhatsAppChannel;
 use crate::config::Config;
 use crate::identity;
 use crate::memory::{self, Memory};
-use crate::providers::{self, Provider};
+use crate::providers::{self, ChatMessage, Provider};
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -35,6 +36,30 @@ const BOOTSTRAP_MAX_CHARS: usize = 20_000;
 const DEFAULT_CHANNEL_INITIAL_BACKOFF_SECS: u64 = 2;
 const DEFAULT_CHANNEL_MAX_BACKOFF_SECS: u64 = 60;
 const CHANNEL_MESSAGE_TIMEOUT_SECS: u64 = 90;
+
+/// Maximum number of messages to keep per conversation in channel mode.
+/// This balances prompt cache hits with memory efficiency.
+const MAX_CHANNEL_HISTORY_MESSAGES: usize = 50;
+
+/// Trim conversation history to prevent unbounded growth.
+/// Preserves the system prompt (first message if role=system) and the most recent messages.
+fn trim_history(history: &mut Vec<ChatMessage>) {
+    // Nothing to trim if within limit
+    let has_system = history.first().map_or(false, |m| m.role == "system");
+    let non_system_count = if has_system {
+        history.len() - 1
+    } else {
+        history.len()
+    };
+
+    if non_system_count <= MAX_CHANNEL_HISTORY_MESSAGES {
+        return;
+    }
+
+    let start = if has_system { 1 } else { 0 };
+    let to_remove = non_system_count - MAX_CHANNEL_HISTORY_MESSAGES;
+    history.drain(start..start + to_remove);
+}
 
 fn spawn_supervised_listener(
     ch: Arc<dyn Channel>,
@@ -672,6 +697,10 @@ pub async fn start_channels(config: Config) -> Result<()> {
     }
     drop(tx); // Drop our copy so rx closes when all channels stop
 
+    // Per-conversation history tracking for prompt cache optimization
+    // Each unique (channel, sender) pair gets its own conversation history
+    let mut conversation_histories: HashMap<String, Vec<ChatMessage>> = HashMap::new();
+
     // Process incoming messages — call the LLM and reply
     while let Some(msg) = rx.recv().await {
         println!(
@@ -692,13 +721,24 @@ pub async fn start_channels(config: Config) -> Result<()> {
                 .await;
         }
 
-        // Call the LLM with system prompt (identity + soul + tools)
+        // Create a unique conversation key for this (channel, sender) pair
+        let conversation_key = format!("{}:{}", msg.channel, msg.sender);
+
+        // Get or create history for this conversation
+        let history = conversation_histories
+            .entry(conversation_key.clone())
+            .or_insert_with(|| vec![ChatMessage::system(&system_prompt)]);
+
+        // Add current message to history
+        history.push(ChatMessage::user(&msg.content));
+
+        // Call the LLM with conversation history for prompt cache optimization
         println!("  ⏳ Processing message...");
         let started_at = Instant::now();
 
         let llm_result = tokio::time::timeout(
             Duration::from_secs(CHANNEL_MESSAGE_TIMEOUT_SECS),
-            provider.chat_with_system(Some(&system_prompt), &msg.content, &model, temperature),
+            provider.chat_with_history(history, &model, temperature),
         )
         .await;
 
@@ -709,6 +749,13 @@ pub async fn start_channels(config: Config) -> Result<()> {
                     started_at.elapsed().as_millis(),
                     truncate_with_ellipsis(&response, 80)
                 );
+
+                // Add response to history for prompt cache continuity
+                history.push(ChatMessage::assistant(&response));
+
+                // Trim history to prevent unbounded growth (preserves system prompt + recent messages)
+                trim_history(history);
+
                 // Find the channel that sent this message and reply
                 for ch in &channels {
                     if ch.name() == msg.channel {
@@ -724,6 +771,8 @@ pub async fn start_channels(config: Config) -> Result<()> {
                     "  ❌ LLM error after {}ms: {e}",
                     started_at.elapsed().as_millis()
                 );
+                // Remove failed user message from history
+                history.pop();
                 for ch in &channels {
                     if ch.name() == msg.channel {
                         let _ = ch.send(&format!("⚠️ Error: {e}"), &msg.sender).await;
@@ -741,6 +790,8 @@ pub async fn start_channels(config: Config) -> Result<()> {
                     timeout_msg,
                     started_at.elapsed().as_millis()
                 );
+                // Remove failed user message from history
+                history.pop();
                 for ch in &channels {
                     if ch.name() == msg.channel {
                         let _ = ch
@@ -1212,5 +1263,117 @@ mod tests {
             .unwrap_or("")
             .contains("listen boom"));
         assert!(calls.load(Ordering::SeqCst) >= 1);
+    }
+
+    // ── Conversation History Tests (Prompt Cache Optimization) ─────
+
+    #[test]
+    fn trim_history_preserves_system_prompt() {
+        let mut history = vec![ChatMessage::system("system prompt")];
+        for i in 0..MAX_CHANNEL_HISTORY_MESSAGES + 20 {
+            history.push(ChatMessage::user(format!("msg {i}")));
+        }
+        let original_len = history.len();
+        assert!(original_len > MAX_CHANNEL_HISTORY_MESSAGES + 1);
+
+        trim_history(&mut history);
+
+        // System prompt preserved
+        assert_eq!(history[0].role, "system");
+        assert_eq!(history[0].content, "system prompt");
+        // Trimmed to limit
+        assert_eq!(history.len(), MAX_CHANNEL_HISTORY_MESSAGES + 1); // +1 for system
+        // Most recent messages preserved
+        let last = &history[history.len() - 1];
+        assert_eq!(
+            last.content,
+            format!("msg {}", MAX_CHANNEL_HISTORY_MESSAGES + 19)
+        );
+    }
+
+    #[test]
+    fn trim_history_noop_when_within_limit() {
+        let mut history = vec![
+            ChatMessage::system("sys"),
+            ChatMessage::user("hello"),
+            ChatMessage::assistant("hi"),
+        ];
+        trim_history(&mut history);
+        assert_eq!(history.len(), 3);
+    }
+
+    #[test]
+    fn trim_history_handles_no_system_prompt() {
+        let mut history = vec![];
+        for i in 0..MAX_CHANNEL_HISTORY_MESSAGES + 10 {
+            history.push(ChatMessage::user(format!("msg {i}")));
+        }
+        let original_len = history.len();
+        assert!(original_len > MAX_CHANNEL_HISTORY_MESSAGES);
+
+        trim_history(&mut history);
+
+        // Trimmed to limit without system prompt
+        assert_eq!(history.len(), MAX_CHANNEL_HISTORY_MESSAGES);
+        // Most recent messages preserved
+        let last = &history[history.len() - 1];
+        assert_eq!(last.content, format!("msg {}", MAX_CHANNEL_HISTORY_MESSAGES + 9));
+    }
+
+    #[test]
+    fn trim_history_preserves_mixed_roles() {
+        let mut history = vec![ChatMessage::system("sys")];
+        for i in 0..MAX_CHANNEL_HISTORY_MESSAGES + 10 {
+            if i % 2 == 0 {
+                history.push(ChatMessage::user(format!("user {i}")));
+            } else {
+                history.push(ChatMessage::assistant(format!("assistant {i}")));
+            }
+        }
+
+        trim_history(&mut history);
+
+        // System prompt preserved
+        assert_eq!(history[0].role, "system");
+        // Trimmed to limit
+        assert_eq!(history.len(), MAX_CHANNEL_HISTORY_MESSAGES + 1);
+        // Most recent messages are preserved (last message is from the last iteration)
+        let last = &history[history.len() - 1];
+        // Since we iterate 0..60 (inclusive), the last iteration is i=59 which is odd (assistant)
+        assert!(last.content.contains("assistant"));
+        // Second-to-last should be the user message from i=58
+        let second_last = &history[history.len() - 2];
+        assert!(second_last.content.contains("user"));
+    }
+
+    #[test]
+    fn trim_history_empty_history() {
+        let mut history: Vec<ChatMessage> = vec![];
+        trim_history(&mut history);
+        assert!(history.is_empty());
+    }
+
+    #[test]
+    fn trim_history_only_system_prompt() {
+        let mut history = vec![ChatMessage::system("sys")];
+        trim_history(&mut history);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].role, "system");
+    }
+
+    #[test]
+    fn trim_history_at_exact_limit() {
+        let mut history = vec![ChatMessage::system("sys")];
+        for i in 0..MAX_CHANNEL_HISTORY_MESSAGES {
+            history.push(ChatMessage::user(format!("msg {i}")));
+        }
+
+        let before_len = history.len();
+        trim_history(&mut history);
+        let after_len = history.len();
+
+        // Should not trim if exactly at limit
+        assert_eq!(before_len, after_len);
+        assert_eq!(after_len, MAX_CHANNEL_HISTORY_MESSAGES + 1);
     }
 }
