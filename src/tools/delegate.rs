@@ -133,7 +133,8 @@ impl Tool for DelegateTool {
         let agent_config = match self.agents.get(agent_name) {
             Some(cfg) => cfg,
             None => {
-                let available: Vec<&str> = self.agents.keys().map(|s: &String| s.as_str()).collect();
+                let available: Vec<&str> =
+                    self.agents.keys().map(|s: &String| s.as_str()).collect();
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
@@ -415,7 +416,11 @@ mod tests {
         // since ollama isn't running, but must NOT get "Unknown agent".
         assert!(
             result.error.is_none()
-                || !result.error.as_deref().unwrap_or("").contains("Unknown agent")
+                || !result
+                    .error
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("Unknown agent")
         );
     }
 }

@@ -303,14 +303,7 @@ mod tests {
             },
         );
 
-        let tools = all_tools(
-            &security,
-            mem,
-            None,
-            &browser,
-            &agents,
-            Some("sk-test"),
-        );
+        let tools = all_tools(&security, mem, None, &browser, &agents, Some("sk-test"));
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"delegate"));
     }
@@ -328,14 +321,7 @@ mod tests {
 
         let browser = BrowserConfig::default();
 
-        let tools = all_tools(
-            &security,
-            mem,
-            None,
-            &browser,
-            &HashMap::new(),
-            None,
-        );
+        let tools = all_tools(&security, mem, None, &browser, &HashMap::new(), None);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(!names.contains(&"delegate"));
     }

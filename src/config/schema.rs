@@ -2215,9 +2215,6 @@ temperature = 0.3
             raw.contains("sk-plaintext-ok"),
             "With encryption disabled, key should remain plaintext"
         );
-        assert!(
-            !raw.contains("enc2:"),
-            "No encryption prefix when disabled"
-        );
+        assert!(!raw.contains("enc2:"), "No encryption prefix when disabled");
     }
 }
