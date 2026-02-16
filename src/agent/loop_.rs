@@ -57,6 +57,36 @@ async fn build_context(mem: &dyn Memory, user_msg: &str) -> String {
     context
 }
 
+/// Build hardware datasheet context from RAG when peripherals are enabled.
+fn build_hardware_context(
+    rag: &crate::rag::HardwareRag,
+    user_msg: &str,
+    boards: &[String],
+    chunk_limit: usize,
+) -> String {
+    if rag.is_empty() || boards.is_empty() {
+        return String::new();
+    }
+
+    let chunks = rag.retrieve(user_msg, boards, chunk_limit);
+    if chunks.is_empty() {
+        return String::new();
+    }
+
+    let mut context = String::new();
+    context.push_str("[Hardware documentation]\n");
+    for chunk in chunks {
+        let board_tag = chunk.board.as_deref().unwrap_or("generic");
+        let _ = writeln!(
+            context,
+            "--- {} ({}) ---\n{}\n",
+            chunk.source, board_tag, chunk.content
+        );
+    }
+    context.push('\n');
+    context
+}
+
 /// Find a tool by name in the registry.
 fn find_tool<'a>(tools: &'a [Box<dyn Tool>], name: &str) -> Option<&'a dyn Tool> {
     tools.iter().find(|t| t.name() == name).map(|t| t.as_ref())
@@ -125,6 +155,7 @@ struct ParsedToolCall {
 
 /// Execute a single turn of the agent loop: send messages, parse tool calls,
 /// execute tools, and loop until the LLM produces a final text response.
+/// When `silent` is true, suppresses stdout (for channel use).
 async fn agent_turn(
     provider: &dyn Provider,
     history: &mut Vec<ChatMessage>,
@@ -132,6 +163,7 @@ async fn agent_turn(
     observer: &dyn Observer,
     model: &str,
     temperature: f64,
+    silent: bool,
 ) -> Result<String> {
     for _iteration in 0..MAX_TOOL_ITERATIONS {
         let response = provider
@@ -143,15 +175,11 @@ async fn agent_turn(
         if tool_calls.is_empty() {
             // No tool calls — this is the final response
             history.push(ChatMessage::assistant(&response));
-            return Ok(if text.is_empty() {
-                response
-            } else {
-                text
-            });
+            return Ok(if text.is_empty() { response } else { text });
         }
 
-        // Print any text the LLM produced alongside tool calls
-        if !text.is_empty() {
+        // Print any text the LLM produced alongside tool calls (unless silent)
+        if !silent && !text.is_empty() {
             print!("{text}");
             let _ = std::io::stdout().flush();
         }
@@ -196,9 +224,7 @@ async fn agent_turn(
 
         // Add assistant message with tool calls + tool results to history
         history.push(ChatMessage::assistant(&response));
-        history.push(ChatMessage::user(format!(
-            "[Tool results]\n{tool_results}"
-        )));
+        history.push(ChatMessage::user(format!("[Tool results]\n{tool_results}")));
     }
 
     anyhow::bail!("Agent exceeded maximum tool iterations ({MAX_TOOL_ITERATIONS})")
@@ -211,9 +237,14 @@ fn build_tool_instructions(tools_registry: &[Box<dyn Tool>]) -> String {
     instructions.push_str("\n## Tool Use Protocol\n\n");
     instructions.push_str("To use a tool, wrap a JSON object in <tool_call></tool_call> tags:\n\n");
     instructions.push_str("```\n<tool_call>\n{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n```\n\n");
+    instructions.push_str(
+        "CRITICAL: Output actual <tool_call> tags—never describe steps or give examples.\n\n",
+    );
+    instructions.push_str("Example: User says \"what's the date?\". You MUST respond with:\n<tool_call>\n{\"name\":\"shell\",\"arguments\":{\"command\":\"date\"}}\n</tool_call>\n\n");
     instructions.push_str("You may use multiple tool calls in a single response. ");
     instructions.push_str("After tool execution, results appear in <tool_result> tags. ");
-    instructions.push_str("Continue reasoning with the results until you can give a final answer.\n\n");
+    instructions
+        .push_str("Continue reasoning with the results until you can give a final answer.\n\n");
     instructions.push_str("### Available Tools\n\n");
 
     for tool in tools_registry {
@@ -236,6 +267,7 @@ pub async fn run(
     provider_override: Option<String>,
     model_override: Option<String>,
     temperature: f64,
+    peripheral_overrides: Vec<String>,
 ) -> Result<()> {
     // ── Wire up agnostic subsystems ──────────────────────────────
     let observer: Arc<dyn Observer> =
@@ -255,19 +287,34 @@ pub async fn run(
     )?);
     tracing::info!(backend = mem.name(), "Memory initialized");
 
-    // ── Tools (including memory tools) ────────────────────────────
+    // ── Peripherals (merge peripheral tools into registry) ─
+    if !peripheral_overrides.is_empty() {
+        tracing::info!(
+            peripherals = ?peripheral_overrides,
+            "Peripheral overrides from CLI (config boards take precedence)"
+        );
+    }
+
+    // ── Tools (including memory tools and peripherals) ────────────
     let composio_key = if config.composio.enabled {
         config.composio.api_key.as_deref()
     } else {
         None
     };
-    let tools_registry = tools::all_tools_with_runtime(
+    let mut tools_registry = tools::all_tools_with_runtime(
         &security,
         runtime,
         mem.clone(),
         composio_key,
         &config.browser,
     );
+
+    let peripheral_tools: Vec<Box<dyn Tool>> =
+        crate::peripherals::create_peripheral_tools(&config.peripherals).await?;
+    if !peripheral_tools.is_empty() {
+        tracing::info!(count = peripheral_tools.len(), "Peripheral tools added");
+        tools_registry.extend(peripheral_tools);
+    }
 
     // ── Resolve provider ─────────────────────────────────────────
     let provider_name = provider_override
@@ -292,6 +339,26 @@ pub async fn run(
         provider: provider_name.to_string(),
         model: model_name.to_string(),
     });
+
+    // ── Hardware RAG (datasheet retrieval when peripherals + datasheet_dir) ──
+    let hardware_rag: Option<crate::rag::HardwareRag> = config
+        .peripherals
+        .datasheet_dir
+        .as_ref()
+        .filter(|d| !d.trim().is_empty())
+        .map(|dir| crate::rag::HardwareRag::load(&config.workspace_dir, dir.trim()))
+        .and_then(Result::ok)
+        .filter(|r: &crate::rag::HardwareRag| !r.is_empty());
+    if let Some(ref rag) = hardware_rag {
+        tracing::info!(chunks = rag.len(), "Hardware RAG loaded");
+    }
+
+    let board_names: Vec<String> = config
+        .peripherals
+        .boards
+        .iter()
+        .map(|b| b.board.clone())
+        .collect();
 
     // ── Build system prompt from workspace MD files (OpenClaw framework) ──
     let skills = crate::skills::load_skills(&config.workspace_dir);
@@ -341,12 +408,44 @@ pub async fn run(
             "Execute actions on 1000+ apps via Composio (Gmail, Notion, GitHub, Slack, etc.). Use action='list' to discover, 'execute' to run, 'connect' to OAuth.",
         ));
     }
+    if config.peripherals.enabled && !config.peripherals.boards.is_empty() {
+        tool_descs.push((
+            "gpio_read",
+            "Read GPIO pin value (0 or 1) on connected hardware (STM32, Arduino). Use when: checking sensor/button state, LED status.",
+        ));
+        tool_descs.push((
+            "gpio_write",
+            "Set GPIO pin high (1) or low (0) on connected hardware. Use when: turning LED on/off, controlling actuators.",
+        ));
+        tool_descs.push((
+            "arduino_upload",
+            "Upload agent-generated Arduino sketch. Use when: user asks for 'make a heart', 'blink pattern', or custom LED behavior on Arduino. You write the full .ino code; ZeroClaw compiles and uploads it. Pin 13 = built-in LED on Uno.",
+        ));
+        tool_descs.push((
+            "hardware_memory_map",
+            "Return flash and RAM address ranges for connected hardware. Use when: user asks for 'upper and lower memory addresses', 'memory map', or 'readable addresses'.",
+        ));
+        tool_descs.push((
+            "hardware_board_info",
+            "Return full board info (chip, architecture, memory map) for connected hardware. Use when: user asks for 'board info', 'what board do I have', 'connected hardware', 'chip info', or 'what hardware'.",
+        ));
+        tool_descs.push((
+            "hardware_capabilities",
+            "Query connected hardware for reported GPIO pins and LED pin. Use when: user asks what pins are available.",
+        ));
+    }
+    let bootstrap_max_chars = if config.agent.compact_context {
+        Some(6000)
+    } else {
+        None
+    };
     let mut system_prompt = crate::channels::build_system_prompt(
         &config.workspace_dir,
         model_name,
         &tool_descs,
         &skills,
         Some(&config.identity),
+        bootstrap_max_chars,
     );
 
     // Append structured tool-use instructions with schemas
@@ -363,8 +462,14 @@ pub async fn run(
                 .await;
         }
 
-        // Inject memory context into user message
-        let context = build_context(mem.as_ref(), &msg).await;
+        // Inject memory + hardware RAG context into user message
+        let mem_context = build_context(mem.as_ref(), &msg).await;
+        let rag_limit = if config.agent.compact_context { 2 } else { 5 };
+        let hw_context = hardware_rag
+            .as_ref()
+            .map(|r| build_hardware_context(r, &msg, &board_names, rag_limit))
+            .unwrap_or_default();
+        let context = format!("{mem_context}{hw_context}");
         let enriched = if context.is_empty() {
             msg.clone()
         } else {
@@ -383,6 +488,7 @@ pub async fn run(
             observer.as_ref(),
             model_name,
             temperature,
+            false,
         )
         .await?;
         println!("{response}");
@@ -417,8 +523,14 @@ pub async fn run(
                     .await;
             }
 
-            // Inject memory context into user message
-            let context = build_context(mem.as_ref(), &msg.content).await;
+            // Inject memory + hardware RAG context into user message
+            let mem_context = build_context(mem.as_ref(), &msg.content).await;
+            let rag_limit = if config.agent.compact_context { 2 } else { 5 };
+            let hw_context = hardware_rag
+                .as_ref()
+                .map(|r| build_hardware_context(r, &msg.content, &board_names, rag_limit))
+                .unwrap_or_default();
+            let context = format!("{mem_context}{hw_context}");
             let enriched = if context.is_empty() {
                 msg.content.clone()
             } else {
@@ -434,6 +546,7 @@ pub async fn run(
                 observer.as_ref(),
                 model_name,
                 temperature,
+                false,
             )
             .await
             {
@@ -466,6 +579,152 @@ pub async fn run(
     });
 
     Ok(())
+}
+
+/// Process a single message through the full agent (with tools, peripherals, memory).
+/// Used by channels (Telegram, Discord, etc.) to enable hardware and tool use.
+pub async fn process_message(config: Config, message: &str) -> Result<String> {
+    let observer: Arc<dyn Observer> =
+        Arc::from(observability::create_observer(&config.observability));
+    let runtime: Arc<dyn runtime::RuntimeAdapter> =
+        Arc::from(runtime::create_runtime(&config.runtime)?);
+    let security = Arc::new(SecurityPolicy::from_config(
+        &config.autonomy,
+        &config.workspace_dir,
+    ));
+    let mem: Arc<dyn Memory> = Arc::from(memory::create_memory(
+        &config.memory,
+        &config.workspace_dir,
+        config.api_key.as_deref(),
+    )?);
+
+    let composio_key = if config.composio.enabled {
+        config.composio.api_key.as_deref()
+    } else {
+        None
+    };
+    let mut tools_registry = tools::all_tools_with_runtime(
+        &security,
+        runtime,
+        mem.clone(),
+        composio_key,
+        &config.browser,
+    );
+    let peripheral_tools: Vec<Box<dyn Tool>> =
+        crate::peripherals::create_peripheral_tools(&config.peripherals).await?;
+    tools_registry.extend(peripheral_tools);
+
+    let provider_name = config.default_provider.as_deref().unwrap_or("openrouter");
+    let model_name = config
+        .default_model
+        .clone()
+        .unwrap_or_else(|| "anthropic/claude-sonnet-4-20250514".into());
+    let provider: Box<dyn Provider> = providers::create_routed_provider(
+        provider_name,
+        config.api_key.as_deref(),
+        &config.reliability,
+        &config.model_routes,
+        &model_name,
+    )?;
+
+    let hardware_rag: Option<crate::rag::HardwareRag> = config
+        .peripherals
+        .datasheet_dir
+        .as_ref()
+        .filter(|d| !d.trim().is_empty())
+        .map(|dir| crate::rag::HardwareRag::load(&config.workspace_dir, dir.trim()))
+        .and_then(Result::ok)
+        .filter(|r: &crate::rag::HardwareRag| !r.is_empty());
+    let board_names: Vec<String> = config
+        .peripherals
+        .boards
+        .iter()
+        .map(|b| b.board.clone())
+        .collect();
+
+    let skills = crate::skills::load_skills(&config.workspace_dir);
+    let mut tool_descs: Vec<(&str, &str)> = vec![
+        ("shell", "Execute terminal commands."),
+        ("file_read", "Read file contents."),
+        ("file_write", "Write file contents."),
+        ("memory_store", "Save to memory."),
+        ("memory_recall", "Search memory."),
+        ("memory_forget", "Delete a memory entry."),
+        ("screenshot", "Capture a screenshot."),
+        ("image_info", "Read image metadata."),
+    ];
+    if config.browser.enabled {
+        tool_descs.push(("browser_open", "Open approved URLs in browser."));
+    }
+    if config.composio.enabled {
+        tool_descs.push(("composio", "Execute actions on 1000+ apps via Composio."));
+    }
+    if config.peripherals.enabled && !config.peripherals.boards.is_empty() {
+        tool_descs.push(("gpio_read", "Read GPIO pin value on connected hardware."));
+        tool_descs.push((
+            "gpio_write",
+            "Set GPIO pin high or low on connected hardware.",
+        ));
+        tool_descs.push((
+            "arduino_upload",
+            "Upload Arduino sketch. Use for 'make a heart', custom patterns. You write full .ino code; ZeroClaw uploads it.",
+        ));
+        tool_descs.push((
+            "hardware_memory_map",
+            "Return flash and RAM address ranges. Use when user asks for memory addresses or memory map.",
+        ));
+        tool_descs.push((
+            "hardware_board_info",
+            "Return full board info (chip, architecture, memory map). Use when user asks for board info, what board, connected hardware, or chip info.",
+        ));
+        tool_descs.push((
+            "hardware_capabilities",
+            "Query connected hardware for reported GPIO pins and LED pin. Use when user asks what pins are available.",
+        ));
+    }
+    let bootstrap_max_chars = if config.agent.compact_context {
+        Some(6000)
+    } else {
+        None
+    };
+    let mut system_prompt = crate::channels::build_system_prompt(
+        &config.workspace_dir,
+        &model_name,
+        &tool_descs,
+        &skills,
+        Some(&config.identity),
+        bootstrap_max_chars,
+    );
+    system_prompt.push_str(&build_tool_instructions(&tools_registry));
+
+    let mem_context = build_context(mem.as_ref(), message).await;
+    let rag_limit = if config.agent.compact_context { 2 } else { 5 };
+    let hw_context = hardware_rag
+        .as_ref()
+        .map(|r| build_hardware_context(r, message, &board_names, rag_limit))
+        .unwrap_or_default();
+    let context = format!("{mem_context}{hw_context}");
+    let enriched = if context.is_empty() {
+        message.to_string()
+    } else {
+        format!("{context}{message}")
+    };
+
+    let mut history = vec![
+        ChatMessage::system(&system_prompt),
+        ChatMessage::user(&enriched),
+    ];
+
+    agent_turn(
+        provider.as_ref(),
+        &mut history,
+        &tools_registry,
+        observer.as_ref(),
+        &model_name,
+        config.default_temperature,
+        true,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -571,12 +830,9 @@ After text."#;
         assert_eq!(history[0].content, "system prompt");
         // Trimmed to limit
         assert_eq!(history.len(), MAX_HISTORY_MESSAGES + 1); // +1 for system
-        // Most recent messages preserved
+                                                             // Most recent messages preserved
         let last = &history[history.len() - 1];
-        assert_eq!(
-            last.content,
-            format!("msg {}", MAX_HISTORY_MESSAGES + 19)
-        );
+        assert_eq!(last.content, format!("msg {}", MAX_HISTORY_MESSAGES + 19));
     }
 
     #[test]

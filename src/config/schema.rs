@@ -63,6 +63,30 @@ pub struct Config {
 
     #[serde(default)]
     pub identity: IdentityConfig,
+
+    #[serde(default)]
+    pub peripherals: PeripheralsConfig,
+
+    /// Agent context limits — use compact for smaller models (e.g. 13B with 4k–8k context).
+    #[serde(default)]
+    pub agent: AgentConfig,
+}
+
+// ── Agent (context limits for smaller models) ────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    /// When true: bootstrap_max_chars=6000, rag_chunk_limit=2. Use for 13B or smaller models.
+    #[serde(default)]
+    pub compact_context: bool,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            compact_context: false,
+        }
+    }
 }
 
 // ── Identity (AIEOS / OpenClaw format) ──────────────────────────
@@ -90,6 +114,66 @@ impl Default for IdentityConfig {
             format: default_identity_format(),
             aieos_path: None,
             aieos_inline: None,
+        }
+    }
+}
+
+// ── Peripherals (hardware: STM32, RPi GPIO, etc.) ────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeripheralsConfig {
+    /// Enable peripheral support (boards become agent tools)
+    #[serde(default)]
+    pub enabled: bool,
+    /// Board configurations (nucleo-f401re, rpi-gpio, etc.)
+    #[serde(default)]
+    pub boards: Vec<PeripheralBoardConfig>,
+    /// Path to datasheet docs (relative to workspace) for RAG retrieval.
+    /// Place .md/.txt files named by board (e.g. nucleo-f401re.md, rpi-gpio.md).
+    #[serde(default)]
+    pub datasheet_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeripheralBoardConfig {
+    /// Board type: "nucleo-f401re", "rpi-gpio", "esp32", etc.
+    pub board: String,
+    /// Transport: "serial", "native", "websocket"
+    #[serde(default = "default_peripheral_transport")]
+    pub transport: String,
+    /// Path for serial: "/dev/ttyACM0", "/dev/ttyUSB0"
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Baud rate for serial (default: 115200)
+    #[serde(default = "default_peripheral_baud")]
+    pub baud: u32,
+}
+
+fn default_peripheral_transport() -> String {
+    "serial".into()
+}
+
+fn default_peripheral_baud() -> u32 {
+    115200
+}
+
+impl Default for PeripheralsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            boards: Vec::new(),
+            datasheet_dir: None,
+        }
+    }
+}
+
+impl Default for PeripheralBoardConfig {
+    fn default() -> Self {
+        Self {
+            board: String::new(),
+            transport: default_peripheral_transport(),
+            path: None,
+            baud: default_peripheral_baud(),
         }
     }
 }
@@ -831,6 +915,8 @@ impl Default for Config {
             secrets: SecretsConfig::default(),
             browser: BrowserConfig::default(),
             identity: IdentityConfig::default(),
+            peripherals: PeripheralsConfig::default(),
+            agent: AgentConfig::default(),
         }
     }
 }
@@ -1141,6 +1227,8 @@ mod tests {
             secrets: SecretsConfig::default(),
             browser: BrowserConfig::default(),
             identity: IdentityConfig::default(),
+            peripherals: PeripheralsConfig::default(),
+            agent: AgentConfig::default(),
         };
 
         let toml_str = toml::to_string_pretty(&config).unwrap();
@@ -1212,6 +1300,8 @@ default_temperature = 0.7
             secrets: SecretsConfig::default(),
             browser: BrowserConfig::default(),
             identity: IdentityConfig::default(),
+            peripherals: PeripheralsConfig::default(),
+            agent: AgentConfig::default(),
         };
 
         config.save().unwrap();
@@ -1965,5 +2055,43 @@ default_temperature = 0.7
         assert!(g.require_pairing);
         assert!(!g.allow_public_bind);
         assert!(g.paired_tokens.is_empty());
+    }
+
+    // ── Peripherals config ───────────────────────────────────────
+
+    #[test]
+    fn peripherals_config_default_disabled() {
+        let p = PeripheralsConfig::default();
+        assert!(!p.enabled);
+        assert!(p.boards.is_empty());
+    }
+
+    #[test]
+    fn peripheral_board_config_defaults() {
+        let b = PeripheralBoardConfig::default();
+        assert!(b.board.is_empty());
+        assert_eq!(b.transport, "serial");
+        assert!(b.path.is_none());
+        assert_eq!(b.baud, 115200);
+    }
+
+    #[test]
+    fn peripherals_config_toml_roundtrip() {
+        let p = PeripheralsConfig {
+            enabled: true,
+            boards: vec![PeripheralBoardConfig {
+                board: "nucleo-f401re".into(),
+                transport: "serial".into(),
+                path: Some("/dev/ttyACM0".into()),
+                baud: 115200,
+            }],
+            datasheet_dir: None,
+        };
+        let toml_str = toml::to_string(&p).unwrap();
+        let parsed: PeripheralsConfig = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.enabled);
+        assert_eq!(parsed.boards.len(), 1);
+        assert_eq!(parsed.boards[0].board, "nucleo-f401re");
+        assert_eq!(parsed.boards[0].path.as_deref(), Some("/dev/ttyACM0"));
     }
 }
