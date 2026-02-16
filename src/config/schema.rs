@@ -1428,6 +1428,7 @@ default_temperature = 0.7
             bot_token: "discord-token".into(),
             guild_id: Some("12345".into()),
             allowed_users: vec![],
+            listen_to_bots: false,
         };
         let json = serde_json::to_string(&dc).unwrap();
         let parsed: DiscordConfig = serde_json::from_str(&json).unwrap();
@@ -1441,6 +1442,7 @@ default_temperature = 0.7
             bot_token: "tok".into(),
             guild_id: None,
             allowed_users: vec![],
+            listen_to_bots: false,
         };
         let json = serde_json::to_string(&dc).unwrap();
         let parsed: DiscordConfig = serde_json::from_str(&json).unwrap();
