@@ -311,8 +311,8 @@ async fn compare_upsert() {
     println!("  Markdown: count={md_count} (append-only, both entries kept)");
     println!("    Can still find latest: {}", !md_results.is_empty());
 
-    // SQLite: upsert replaces, count stays at 1
-    assert_eq!(sq_count, 1);
+    // SQLite: new behavior - inserts multiple records for same key
+    assert_eq!(sq_count, 2);
     assert_eq!(sq_entry.unwrap().content, "loves Rust");
 
     // Markdown: append-only, count increases

@@ -68,7 +68,7 @@ impl SqliteMemory {
             "-- Core memories table
             CREATE TABLE IF NOT EXISTS memories (
                 id          TEXT PRIMARY KEY,
-                key         TEXT NOT NULL UNIQUE,
+                key         TEXT NOT NULL,
                 content     TEXT NOT NULL,
                 category    TEXT NOT NULL DEFAULT 'core',
                 embedding   BLOB,
@@ -362,12 +362,7 @@ impl Memory for SqliteMemory {
 
         conn.execute(
             "INSERT INTO memories (id, key, content, category, embedding, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT(key) DO UPDATE SET
-                content = excluded.content,
-                category = excluded.category,
-                embedding = excluded.embedding,
-                updated_at = excluded.updated_at",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![id, key, content, cat, embedding_bytes, now, now],
         )?;
 
@@ -498,7 +493,10 @@ impl Memory for SqliteMemory {
             .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
 
         let mut stmt = conn.prepare(
-            "SELECT id, key, content, category, created_at FROM memories WHERE key = ?1",
+            "SELECT id, key, content, category, created_at FROM memories
+             WHERE key = ?1
+             ORDER BY updated_at DESC
+             LIMIT 1",
         )?;
 
         let mut rows = stmt.query_map(params![key], |row| {
@@ -629,7 +627,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sqlite_store_upsert() {
+    async fn sqlite_store_same_key_creates_multiple_records() {
         let (_tmp, mem) = temp_sqlite();
         mem.store("pref", "likes Rust", MemoryCategory::Core)
             .await
@@ -638,9 +636,49 @@ mod tests {
             .await
             .unwrap();
 
+        // Both records should exist
+        assert_eq!(mem.count().await.unwrap(), 2);
+
+        // get() should return the most recent one
         let entry = mem.get("pref").await.unwrap().unwrap();
         assert_eq!(entry.content, "loves Rust");
-        assert_eq!(mem.count().await.unwrap(), 1);
+    }
+
+    // ── Bug fix for issue #221: Multiple facts stored with same key ───
+
+    #[tokio::test]
+    async fn sqlite_multiple_facts_same_key_can_all_be_recalled() {
+        let (_tmp, mem) = temp_sqlite();
+
+        // Simulate the Slack conversation scenario from issue #221
+        let user_key = "slack_C04DR8LNAQZ";
+        mem.store(user_key, "I'm Paul", MemoryCategory::Conversation)
+            .await
+            .unwrap();
+        mem.store(user_key, "I'm 45", MemoryCategory::Conversation)
+            .await
+            .unwrap();
+        mem.store(user_key, "I have a dog", MemoryCategory::Conversation)
+            .await
+            .unwrap();
+
+        // All three facts should be stored
+        assert_eq!(mem.count().await.unwrap(), 3);
+
+        // Should be able to recall "age" information
+        let age_results = mem.recall("45", 10).await.unwrap();
+        assert!(!age_results.is_empty(), "Should find '45' in memory");
+        assert!(age_results.iter().any(|r| r.content.contains("45")));
+
+        // Should be able to recall "dog" information
+        let dog_results = mem.recall("dog", 10).await.unwrap();
+        assert!(!dog_results.is_empty(), "Should find 'dog' in memory");
+        assert!(dog_results.iter().any(|r| r.content.contains("dog")));
+
+        // Should be able to recall "Paul" information
+        let paul_results = mem.recall("Paul", 10).await.unwrap();
+        assert!(!paul_results.is_empty(), "Should find 'Paul' in memory");
+        assert!(paul_results.iter().any(|r| r.content.contains("Paul")));
     }
 
     #[tokio::test]
@@ -956,7 +994,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fts5_syncs_on_update() {
+    async fn fts5_syncs_on_insert_new_record_same_key() {
         let (_tmp, mem) = temp_sqlite();
         mem.store("upd_key", "original_content_111", MemoryCategory::Core)
             .await
@@ -966,7 +1004,7 @@ mod tests {
             .unwrap();
 
         let conn = mem.conn.lock().unwrap();
-        // Old content should not be findable
+        // Both contents should be findable (new behavior: multiple records per key)
         let old: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH '\"original_content_111\"'",
@@ -974,7 +1012,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(old, 0);
+        assert_eq!(old, 1);
 
         // New content should be findable
         let new: i64 = conn
@@ -985,6 +1023,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(new, 1);
+
+        // get() should return the most recent one
+        let entry = mem.get("upd_key").await.unwrap().unwrap();
+        assert_eq!(entry.content, "updated_content_222");
     }
 
     // ── With-embedder constructor test ───────────────────────────
