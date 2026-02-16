@@ -120,6 +120,10 @@ enum Commands {
         /// Memory backend (sqlite, lucid, markdown, none) - used in quick mode, default: sqlite
         #[arg(long)]
         memory: Option<String>,
+
+        /// Runtime kind (native, docker, wasm) - used in quick mode, default: native
+        #[arg(long)]
+        runtime: Option<String>,
     },
 
     /// Start the AI agent loop
@@ -136,9 +140,9 @@ enum Commands {
         #[arg(long)]
         model: Option<String>,
 
-        /// Temperature (0.0 - 2.0); defaults to config default_temperature
-        #[arg(short, long)]
-        temperature: Option<f64>,
+        /// Temperature (0.0 - 2.0)
+        #[arg(short, long, default_value = "0.7")]
+        temperature: f64,
 
         /// Attach a peripheral (board:path, e.g. nucleo-f401re:/dev/ttyACM0)
         #[arg(long)]
@@ -357,41 +361,35 @@ async fn main() -> Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    // Onboard runs quick setup by default, or the interactive wizard with --interactive.
-    // The onboard wizard uses reqwest::blocking internally, which creates its own
-    // Tokio runtime. To avoid "Cannot drop a runtime in a context where blocking is
-    // not allowed", we run the wizard on a blocking thread via spawn_blocking.
+    // Onboard runs quick setup by default, or the interactive wizard with --interactive
     if let Commands::Onboard {
         interactive,
         channels_only,
         api_key,
         provider,
         memory,
+        runtime,
     } = &cli.command
     {
-        let interactive = *interactive;
-        let channels_only = *channels_only;
-        let api_key = api_key.clone();
-        let provider = provider.clone();
-        let memory = memory.clone();
-
-        if interactive && channels_only {
+        if *interactive && *channels_only {
             bail!("Use either --interactive or --channels-only, not both");
         }
-        if channels_only && (api_key.is_some() || provider.is_some() || memory.is_some()) {
-            bail!("--channels-only does not accept --api-key, --provider, or --memory");
+        if *channels_only && (api_key.is_some() || provider.is_some() || memory.is_some() || runtime.is_some()) {
+            bail!("--channels-only does not accept --api-key, --provider, --memory, or --runtime");
         }
 
-        let config = tokio::task::spawn_blocking(move || {
-            if channels_only {
-                onboard::run_channels_repair_wizard()
-            } else if interactive {
-                onboard::run_wizard()
-            } else {
-                onboard::run_quick_setup(api_key.as_deref(), provider.as_deref(), memory.as_deref())
-            }
-        })
-        .await??;
+        let config = if *channels_only {
+            onboard::run_channels_repair_wizard()?
+        } else if *interactive {
+            onboard::run_wizard()?
+        } else {
+            onboard::run_quick_setup(
+                api_key.as_deref(),
+                provider.as_deref(),
+                memory.as_deref(),
+                runtime.as_deref(),
+            )?
+        };
         // Auto-start channels if user said yes during wizard
         if std::env::var("ZEROCLAW_AUTOSTART_CHANNELS").as_deref() == Ok("1") {
             channels::start_channels(config).await?;
@@ -412,10 +410,7 @@ async fn main() -> Result<()> {
             model,
             temperature,
             peripheral,
-        } => {
-            let temp = temperature.unwrap_or(config.default_temperature);
-            agent::run(config, message, provider, model, temp, peripheral).await
-        }
+        } => agent::run(config, message, provider, model, temperature, peripheral).await,
 
         Commands::Gateway { port, host } => {
             if port == 0 {
