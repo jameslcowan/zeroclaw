@@ -14,5 +14,3 @@
 Pin 13: User LED (LD2)
 - Output, active high
 - PA5 on STM32F401
-
-

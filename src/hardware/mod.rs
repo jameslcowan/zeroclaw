@@ -194,11 +194,11 @@ fn run_info(chip: &str) -> Result<()> {
 #[cfg(all(feature = "hardware", feature = "probe"))]
 fn info_via_probe(chip: &str) -> anyhow::Result<()> {
     use probe_rs::config::MemoryRegion;
-    use probe_rs::{Permissions, Session};
+    use probe_rs::{Session, SessionConfig};
 
     println!("Connecting to {} via USB (ST-Link)...", chip);
-    let session =
-        Session::auto_attach(chip, Permissions::default()).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let session = Session::auto_attach(chip, SessionConfig::default())
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let target = session.target();
     println!();

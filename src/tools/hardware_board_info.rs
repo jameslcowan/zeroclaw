@@ -155,10 +155,10 @@ impl Tool for HardwareBoardInfoTool {
 #[cfg(feature = "probe")]
 fn probe_board_info(chip: &str) -> anyhow::Result<String> {
     use probe_rs::config::MemoryRegion;
-    use probe_rs::{Permissions, Session};
+    use probe_rs::{Session, SessionConfig};
 
-    let session =
-        Session::auto_attach(chip, Permissions::default()).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let session = Session::auto_attach(chip, SessionConfig::default())
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
     let target = session.target();
     let arch = session.architecture();
 

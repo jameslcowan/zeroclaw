@@ -85,10 +85,10 @@ fn memory_map_for_board(board_name: Option<&str>) -> String {
 #[cfg(all(feature = "hardware", feature = "probe"))]
 fn probe_memory_map(chip: &str) -> anyhow::Result<String> {
     use probe_rs::config::MemoryRegion;
-    use probe_rs::{Permissions, Session};
+    use probe_rs::{Session, SessionConfig};
 
-    let session =
-        Session::auto_attach(chip, Permissions::default()).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let session = Session::auto_attach(chip, SessionConfig::default())
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
     let target = session.target();
     let mut out = String::new();
     for region in target.memory_map.iter() {

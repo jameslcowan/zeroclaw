@@ -144,11 +144,11 @@ fn parse_hex_address(s: &str) -> Option<u64> {
 #[cfg(feature = "probe")]
 fn probe_read_memory(chip: &str, address: u64, length: usize) -> anyhow::Result<String> {
     use probe_rs::MemoryInterface;
-    use probe_rs::Permissions;
     use probe_rs::Session;
+    use probe_rs::SessionConfig;
 
-    let mut session =
-        Session::auto_attach(chip, Permissions::default()).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let mut session = Session::auto_attach(chip, SessionConfig::default())
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let mut core = session.core(0)?;
     let mut buf = vec![0u8; length];
