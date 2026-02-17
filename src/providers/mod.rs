@@ -105,8 +105,11 @@ pub async fn api_error(provider: &str, response: reqwest::Response) -> anyhow::E
 /// For Anthropic, the provider-specific env var is `ANTHROPIC_OAUTH_TOKEN` (for setup-tokens)
 /// followed by `ANTHROPIC_API_KEY` (for regular API keys).
 fn resolve_provider_credential(name: &str, credential_override: Option<&str>) -> Option<String> {
-    if let Some(key) = credential_override.map(str::trim).filter(|k| !k.is_empty()) {
-        return Some(key.to_string());
+    if let Some(credential_value) = credential_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(credential_value.to_string());
     }
 
     let provider_env_candidates: Vec<&str> = match name {
@@ -188,8 +191,8 @@ pub fn create_provider(
     name: &str,
     credential_override: Option<&str>,
 ) -> anyhow::Result<Box<dyn Provider>> {
-    let resolved_key = resolve_provider_credential(name, credential_override);
-    let key = resolved_key.as_deref();
+    let resolved_credential = resolve_provider_credential(name, credential_override);
+    let key = resolved_credential.as_ref().map(String::as_str);
     match name {
         // ── Primary providers (custom implementations) ───────
         "openrouter" => Ok(Box::new(openrouter::OpenRouterProvider::new(key))),
@@ -341,15 +344,6 @@ pub fn create_resilient_provider(
     for fallback in &reliability.fallback_providers {
         if fallback == primary_name || providers.iter().any(|(name, _)| name == fallback) {
             continue;
-        }
-
-        if credential_override.is_some() && fallback != "ollama" {
-            tracing::warn!(
-                fallback_provider = fallback,
-                primary_provider = primary_name,
-                "Fallback provider will use the primary provider's API key — \
-                 this will fail if the providers require different keys"
-            );
         }
 
         match create_provider(fallback, credential_override) {
