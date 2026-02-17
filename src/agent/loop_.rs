@@ -307,6 +307,7 @@ fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) {
     let mut text_parts = Vec::new();
     let mut calls = Vec::new();
     let mut remaining = response;
+    let mut malformed_tool_calls = 0;
 
     // First, try to parse as OpenAI-style JSON response with tool_calls array
     // This handles providers like Minimax that return tool_calls in native JSON format
@@ -344,7 +345,11 @@ fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) {
             }
 
             if !parsed_any {
-                tracing::warn!("Malformed <tool_call> JSON: expected tool-call object in tag body");
+                malformed_tool_calls += 1;
+                tracing::warn!(
+                    "Malformed <invoke> JSON: expected tool-call object in tag body. Raw content: {:?}",
+                    inner
+                );
             }
 
             remaining = &remaining[start + end + 12..];
@@ -367,7 +372,22 @@ fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) {
         text_parts.push(remaining.trim().to_string());
     }
 
-    (text_parts.join("\n"), calls)
+    let final_text = text_parts.join("\n");
+
+    // If we have malformed tool calls but no text and no successfully parsed calls,
+    // return a fallback message instead of empty string
+    if final_text.is_empty() && calls.is_empty() && malformed_tool_calls > 0 {
+        tracing::warn!(
+            "All tool calls failed to parse ({} malformed calls). Returning fallback message.",
+            malformed_tool_calls
+        );
+        return (
+            "I encountered an issue processing tool calls. Please try rephrasing your request.".to_string(),
+            calls,
+        );
+    }
+
+    (final_text, calls)
 }
 
 fn parse_structured_tool_calls(tool_calls: &[ToolCall]) -> Vec<ParsedToolCall> {
