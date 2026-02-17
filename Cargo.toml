@@ -66,6 +66,9 @@ rand = "0.8"
 # Async traits
 async-trait = "0.1"
 
+# Fast mutexes
+parking_lot = "0.12"
+
 # Memory / persistence
 rusqlite = { version = "0.38", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }

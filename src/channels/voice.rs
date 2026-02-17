@@ -3,9 +3,9 @@
 // ═══════════════════════════════════════════════════════════════
 
 use super::traits::Channel;
-use crate::audio::{AudioCapture, AudioPlayback, AudioConfig};
-use crate::stt::{SttEngine, SttConfig};
-use crate::tts::{TtsEngine, TtsConfig};
+use crate::audio::{AudioCapture, AudioConfig, AudioPlayback};
+use crate::stt::{SttConfig, SttEngine};
+use crate::tts::{TtsConfig, TtsEngine};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -44,22 +44,17 @@ pub struct VoiceChannel {
 
 impl VoiceChannel {
     /// Create a new voice channel
-    pub fn new(
-        name: String,
-        stt_config: SttConfig,
-        tts_config: TtsConfig,
-    ) -> Result<Self> {
+    pub fn new(name: String, stt_config: SttConfig, tts_config: TtsConfig) -> Result<Self> {
         let audio_config = AudioConfig {
             sample_rate: stt_config.sample_rate,
             channels: 1,
             buffer_size: 4096,
         };
 
-        let capture = AudioCapture::new(&audio_config)
-            .context("Failed to initialize audio capture")?;
+        let capture =
+            AudioCapture::new(&audio_config).context("Failed to initialize audio capture")?;
 
-        let playback = AudioPlayback::new()
-            .context("Failed to initialize audio playback")?;
+        let playback = AudioPlayback::new().context("Failed to initialize audio playback")?;
 
         let stt_engine = SttEngine::new(stt_config.clone());
         let tts_engine = TtsEngine::new(tts_config.clone());
@@ -89,11 +84,10 @@ impl VoiceChannel {
         tts_config: TtsConfig,
         audio_config: AudioConfig,
     ) -> Result<Self> {
-        let capture = AudioCapture::new(&audio_config)
-            .context("Failed to initialize audio capture")?;
+        let capture =
+            AudioCapture::new(&audio_config).context("Failed to initialize audio capture")?;
 
-        let playback = AudioPlayback::new()
-            .context("Failed to initialize audio playback")?;
+        let playback = AudioPlayback::new().context("Failed to initialize audio playback")?;
 
         let stt_engine = SttEngine::new(stt_config.clone());
         let tts_engine = TtsEngine::new(tts_config.clone());
@@ -155,15 +149,19 @@ impl VoiceChannel {
     /// Capture audio and transcribe to text
     async fn capture_and_transcribe(&self) -> Result<String> {
         // Capture audio
-        let audio_data = self.capture.record_until_silence(
-            self.vad_threshold,
-            self.min_speech_duration,
-            self.silence_timeout,
-        ).await
+        let audio_data = self
+            .capture
+            .record_until_silence(
+                self.vad_threshold,
+                self.min_speech_duration,
+                self.silence_timeout,
+            )
+            .await
             .context("Failed to capture audio")?;
 
         // Transcribe
-        let result = self.stt_engine
+        let result = self
+            .stt_engine
             .transcribe_with_config(&audio_data, &self.stt_config)
             .await
             .context("Failed to transcribe audio")?;
@@ -174,7 +172,8 @@ impl VoiceChannel {
     /// Synthesize speech and play it
     async fn synthesize_and_play(&self, text: &str) -> Result<()> {
         // Synthesize
-        let result = self.tts_engine
+        let result = self
+            .tts_engine
             .synthesize_with_config(text, &self.tts_config)
             .await
             .context("Failed to synthesize speech")?;
@@ -183,7 +182,8 @@ impl VoiceChannel {
         let audio_samples = self.convert_audio_to_f32(&result.audio_data, &result.format);
 
         // Play audio
-        self.playback.play(audio_samples)
+        self.playback
+            .play(audio_samples)
             .context("Failed to play audio")?;
 
         Ok(())
@@ -395,11 +395,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = VoiceChannel::new(
-            "test-voice".to_string(),
-            stt_config,
-            tts_config,
-        );
+        let result = VoiceChannel::new("test-voice".to_string(), stt_config, tts_config);
 
         // May fail if no audio devices, so we just check the type
         assert!(result.is_ok() || result.is_err());
@@ -410,11 +406,7 @@ mod tests {
         let stt_config = SttConfig::default();
         let tts_config = TtsConfig::default();
 
-        let channel = VoiceChannel::new(
-            "test".to_string(),
-            stt_config,
-            tts_config,
-        ).unwrap();
+        let channel = VoiceChannel::new("test".to_string(), stt_config, tts_config).unwrap();
 
         assert!(channel.detect_wake_word("hey assistant, what time is it?"));
         assert!(channel.detect_wake_word("HEY ASSISTANT!"));
@@ -428,13 +420,12 @@ mod tests {
         let stt_config = SttConfig::default();
         let tts_config = TtsConfig::default();
 
-        let channel = VoiceChannel::new(
-            "test".to_string(),
-            stt_config,
-            tts_config,
-        ).unwrap();
+        let channel = VoiceChannel::new("test".to_string(), stt_config, tts_config).unwrap();
 
-        assert_eq!(channel.remove_wake_word("hey assistant, what time is it?"), "what time is it?");
+        assert_eq!(
+            channel.remove_wake_word("hey assistant, what time is it?"),
+            "what time is it?"
+        );
         assert_eq!(channel.remove_wake_word("HEY ASSISTANT!"), "!");
         assert_eq!(channel.remove_wake_word("hello world"), "hello world");
     }
@@ -444,12 +435,9 @@ mod tests {
         let stt_config = SttConfig::default();
         let tts_config = TtsConfig::default();
 
-        let channel = VoiceChannel::new(
-            "test".to_string(),
-            stt_config,
-            tts_config,
-        ).unwrap()
-        .with_wake_word("ok zero".to_string());
+        let channel = VoiceChannel::new("test".to_string(), stt_config, tts_config)
+            .unwrap()
+            .with_wake_word("ok zero".to_string());
 
         assert!(channel.detect_wake_word("ok zero, tell me a joke"));
         assert!(!channel.detect_wake_word("hey assistant"));
@@ -460,12 +448,9 @@ mod tests {
         let stt_config = SttConfig::default();
         let tts_config = TtsConfig::default();
 
-        let channel = VoiceChannel::new(
-            "test".to_string(),
-            stt_config,
-            tts_config,
-        ).unwrap()
-        .with_vad_threshold(1.5); // Should be clamped to 1.0
+        let channel = VoiceChannel::new("test".to_string(), stt_config, tts_config)
+            .unwrap()
+            .with_vad_threshold(1.5); // Should be clamped to 1.0
 
         assert_eq!(channel.vad_threshold, 1.0);
     }
@@ -475,12 +460,9 @@ mod tests {
         let stt_config = SttConfig::default();
         let tts_config = TtsConfig::default();
 
-        let channel = VoiceChannel::new(
-            "test".to_string(),
-            stt_config,
-            tts_config,
-        ).unwrap()
-        .with_min_speech_duration(0.01); // Should be clamped to 0.1
+        let channel = VoiceChannel::new("test".to_string(), stt_config, tts_config)
+            .unwrap()
+            .with_min_speech_duration(0.01); // Should be clamped to 0.1
 
         assert_eq!(channel.min_speech_duration, 0.1);
     }
@@ -490,12 +472,9 @@ mod tests {
         let stt_config = SttConfig::default();
         let tts_config = TtsConfig::default();
 
-        let channel = VoiceChannel::new(
-            "test".to_string(),
-            stt_config,
-            tts_config,
-        ).unwrap()
-        .with_silence_timeout(0.1); // Should be clamped to 0.5
+        let channel = VoiceChannel::new("test".to_string(), stt_config, tts_config)
+            .unwrap()
+            .with_silence_timeout(0.1); // Should be clamped to 0.5
 
         assert_eq!(channel.silence_timeout, 0.5);
     }
@@ -505,11 +484,7 @@ mod tests {
         let stt_config = SttConfig::default();
         let tts_config = TtsConfig::default();
 
-        let channel = VoiceChannel::new(
-            "test".to_string(),
-            stt_config,
-            tts_config,
-        ).unwrap();
+        let channel = VoiceChannel::new("test".to_string(), stt_config, tts_config).unwrap();
 
         let beep = channel.convert_beep_to_f32(440.0, 0.1);
         // At 24000 Hz (default sample rate), 0.1 seconds should be 2400 samples
@@ -521,11 +496,7 @@ mod tests {
         let stt_config = SttConfig::default();
         let tts_config = TtsConfig::default();
 
-        let channel = VoiceChannel::new(
-            "my-voice".to_string(),
-            stt_config,
-            tts_config,
-        ).unwrap();
+        let channel = VoiceChannel::new("my-voice".to_string(), stt_config, tts_config).unwrap();
 
         assert_eq!(channel.name(), "my-voice");
     }
@@ -535,11 +506,7 @@ mod tests {
         let stt_config = SttConfig::default();
         let tts_config = TtsConfig::default();
 
-        let channel = VoiceChannel::new(
-            "test".to_string(),
-            stt_config,
-            tts_config,
-        ).unwrap();
+        let channel = VoiceChannel::new("test".to_string(), stt_config, tts_config).unwrap();
 
         // Health check should return bool (false if API keys not set)
         let health = channel.health_check().await;

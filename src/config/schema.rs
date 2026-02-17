@@ -2008,36 +2008,36 @@ impl Config {
     pub fn load_or_init() -> Result<Self> {
         // Check ZEROCLAW_WORKSPACE first to allow multi-workspace setups
         // This must be done before determining the config path
-        let (zeroclaw_dir, workspace_dir) = if let Ok(workspace) = std::env::var("ZEROCLAW_WORKSPACE") {
-            if workspace.is_empty() {
-                // Fallback to default if env var is empty
+        let (zeroclaw_dir, workspace_dir) =
+            if let Ok(workspace) = std::env::var("ZEROCLAW_WORKSPACE") {
+                if workspace.is_empty() {
+                    // Fallback to default if env var is empty
+                    let home = UserDirs::new()
+                        .map(|u| u.home_dir().to_path_buf())
+                        .context("Could not find home directory")?;
+                    let zeroclaw_dir = home.join(".zeroclaw");
+                    (zeroclaw_dir.clone(), zeroclaw_dir.join("workspace"))
+                } else {
+                    // Use the workspace path from env var
+                    // The config will be stored at: ZEROCLAW_WORKSPACE/config.toml
+                    // The workspace dir will be: ZEROCLAW_WORKSPACE/workspace
+                    let workspace_path = PathBuf::from(&workspace);
+                    (workspace_path.clone(), workspace_path.join("workspace"))
+                }
+            } else {
+                // No env var, use default ~/.zeroclaw/
                 let home = UserDirs::new()
                     .map(|u| u.home_dir().to_path_buf())
                     .context("Could not find home directory")?;
                 let zeroclaw_dir = home.join(".zeroclaw");
                 (zeroclaw_dir.clone(), zeroclaw_dir.join("workspace"))
-            } else {
-                // Use the workspace path from env var
-                // The config will be stored at: ZEROCLAW_WORKSPACE/config.toml
-                // The workspace dir will be: ZEROCLAW_WORKSPACE/workspace
-                let workspace_path = PathBuf::from(&workspace);
-                (workspace_path.clone(), workspace_path.join("workspace"))
-            }
-        } else {
-            // No env var, use default ~/.zeroclaw/
-            let home = UserDirs::new()
-                .map(|u| u.home_dir().to_path_buf())
-                .context("Could not find home directory")?;
-            let zeroclaw_dir = home.join(".zeroclaw");
-            (zeroclaw_dir.clone(), zeroclaw_dir.join("workspace"))
-        };
+            };
 
         let config_path = zeroclaw_dir.join("config.toml");
 
         if !zeroclaw_dir.exists() {
             fs::create_dir_all(&zeroclaw_dir).context("Failed to create zeroclaw directory")?;
-            fs::create_dir_all(&workspace_dir)
-                .context("Failed to create workspace directory")?;
+            fs::create_dir_all(&workspace_dir).context("Failed to create workspace directory")?;
         }
 
         if config_path.exists() {
@@ -3785,8 +3785,12 @@ pitch = -10.5
         let expected_workspace_dir = workspace_dir.join("workspace");
 
         // Verify the path format matches what we expect from load_or_init
-        assert!(expected_config_path.to_string_lossy().contains("test_zeroclaw_workspace"));
-        assert!(expected_workspace_dir.to_string_lossy().contains("test_zeroclaw_workspace"));
+        assert!(expected_config_path
+            .to_string_lossy()
+            .contains("test_zeroclaw_workspace"));
+        assert!(expected_workspace_dir
+            .to_string_lossy()
+            .contains("test_zeroclaw_workspace"));
 
         // Clean up
         std::env::remove_var("ZEROCLAW_WORKSPACE");

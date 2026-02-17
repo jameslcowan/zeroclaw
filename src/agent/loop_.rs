@@ -390,7 +390,8 @@ fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) {
             malformed_tool_calls
         );
         return (
-            "I encountered an issue processing tool calls. Please try rephrasing your request.".to_string(),
+            "I encountered an issue processing tool calls. Please try rephrasing your request."
+                .to_string(),
             calls,
         );
     }

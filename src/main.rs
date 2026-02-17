@@ -415,7 +415,15 @@ async fn main() -> Result<()> {
         } => {
             // Use CLI temperature if provided, otherwise fall back to config default
             let effective_temperature = temperature.unwrap_or(config.default_temperature);
-            agent::run(config, message, provider, model, effective_temperature, peripheral).await
+            agent::run(
+                config,
+                message,
+                provider,
+                model,
+                effective_temperature,
+                peripheral,
+            )
+            .await
         }
 
         Commands::Gateway { port, host } => {
