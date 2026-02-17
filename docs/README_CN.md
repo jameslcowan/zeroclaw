@@ -92,7 +92,7 @@ ls -lh target/release/zeroclaw
 
 #### 可选
 
-- **Docker 桌面** — 仅在使用 [Docker 沙盒运行时](#runtime-support-current) (`runtime.kind = "docker"`) 时才需要。通过`winget install Docker.DockerDesktop`安装。
+- **Docker 桌面** — 仅在使用 [Docker 沙盒运行时](#运行时支持当前) (`runtime.kind = "docker"`) 时才需要。通过`winget install Docker.DockerDesktop`安装。
 
 </details>
 
@@ -120,7 +120,7 @@ ls -lh target/release/zeroclaw
 
 #### 可选
 
-- **Docker** — 仅当使用[Docker 沙盒运行时](#runtime-support-current) (`runtime.kind = "docker"`) 时才需要。通过包管理器或[docker.com](https://docs.docker.com/engine/install/)安装。
+- **Docker** — 仅当使用[Docker 沙盒运行时](#运行时支持当前) (`runtime.kind = "docker"`) 时才需要。通过包管理器或[docker.com](https://docs.docker.com/engine/install/)安装。
 
 > **注意：** 默认`cargo build --release` 默认使用 `codegen-units=1`，可兼容低内存设备（例如 1GB RAM 的 Raspberry Pi 3）。如需在高性能机器上更快构建，可使用 `cargo build --profile release-fast`。
 
