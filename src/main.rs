@@ -140,9 +140,9 @@ enum Commands {
         #[arg(long)]
         model: Option<String>,
 
-        /// Temperature (0.0 - 2.0)
-        #[arg(short, long, default_value = "0.7")]
-        temperature: f64,
+        /// Temperature (0.0 - 2.0) - uses config default if not specified
+        #[arg(short, long)]
+        temperature: Option<f64>,
 
         /// Attach a peripheral (board:path, e.g. nucleo-f401re:/dev/ttyACM0)
         #[arg(long)]
@@ -412,7 +412,11 @@ async fn main() -> Result<()> {
             model,
             temperature,
             peripheral,
-        } => agent::run(config, message, provider, model, temperature, peripheral).await,
+        } => {
+            // Use CLI temperature if provided, otherwise fall back to config default
+            let effective_temperature = temperature.unwrap_or(config.default_temperature);
+            agent::run(config, message, provider, model, effective_temperature, peripheral).await
+        }
 
         Commands::Gateway { port, host } => {
             if port == 0 {
