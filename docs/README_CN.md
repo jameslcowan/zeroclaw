@@ -15,15 +15,15 @@
 快速、小巧、完全自治的 AI 助手基础设施 —— 随处部署，随意替换。
 
 ```
-~3.4MB 二进制 · <10ms 启动 · 1,017 项测试 · 22+ 提供商 · 8 个 trait · 全面可插拔
+~3.4MB 二进制 · <10ms 启动 · 1,017 项测试 · 22+ 提供商（providers） · 8 个 trait · 全面可插拔
 ```
 
 ### 为什么团队选择 ZeroClaw
 
 - **默认精简：** 小巧 Rust 二进制、启动快、内存占用低。
 - **安全优先：** 配对机制、严格沙箱、显式白名单、工作区作用域。
-- **完全可替换：** 核心系统均为 trait（providers、channels、tools、memory、tunnels）。
-- **无厂商锁定：** 支持 OpenAI 兼容 provider + 可插拔自定义端点。
+- **完全可替换：** 核心系统均为 trait（提供商（providers）、通道（channels）、工具（tools）、memory、tunnels）。
+- **无厂商锁定：** 支持 OpenAI 兼容提供商（provider）+ 可插拔自定义端点。
 
 ## 基准快照（ZeroClaw vs OpenClaw）
 
@@ -52,7 +52,7 @@ ls -lh target/release/zeroclaw
 ## 快速开始
 
 ```bash
-git clone https://github.com/theonlyhennygod/zeroclaw.git
+git clone https://github.com/zeroclaw-labs/zeroclaw.git
 cd zeroclaw
 cargo build --release
 cargo install --path . --force
@@ -63,7 +63,7 @@ zeroclaw onboard --api-key sk-... --provider openrouter
 # 或使用交互式向导
 zeroclaw onboard --interactive
 
-# 或仅快速修复 channels/allowlists
+# 或仅快速修复通道白名单（channels/allowlists）
 zeroclaw onboard --channels-only
 
 # 聊天
@@ -85,7 +85,7 @@ zeroclaw status
 # 运行系统诊断
 zeroclaw doctor
 
-# 检查 channel 健康状态
+# 检查通道（channel）健康状态
 zeroclaw channel doctor
 
 # 获取集成配置详情
@@ -112,7 +112,7 @@ zeroclaw migrate openclaw
 
 | 子系统 | Trait | 内置内容 | 扩展 |
 |-----------|-------|------------|--------|
-| **AI 模型** | `Provider` | 22+ providers（OpenRouter、Anthropic、OpenAI、Ollama、Venice、Groq、Mistral、xAI、DeepSeek、Together、Fireworks、Perplexity、Cohere、Bedrock 等） | `custom:https://your-api.com` —— 任意 OpenAI 兼容 API |
+| **AI 模型** | `Provider` | 22+ 提供商（providers）（OpenRouter、Anthropic、OpenAI、Ollama、Venice、Groq、Mistral、xAI、DeepSeek、Together、Fireworks、Perplexity、Cohere、Bedrock 等） | `custom:https://your-api.com` —— 任意 OpenAI 兼容 API |
 | **通道** | `Channel` | CLI、Telegram、Discord、Slack、iMessage、Matrix、WhatsApp、Webhook | 任意消息 API |
 | **记忆** | `Memory` | SQLite 混合检索（FTS5 + 向量余弦相似度）、Markdown | 任意持久化后端 |
 | **工具** | `Tool` | shell、file_read、file_write、memory_store、memory_recall、memory_forget、browser_open（Brave + allowlist）、composio（可选） | 任意能力 |
@@ -146,7 +146,7 @@ zeroclaw migrate openclaw
 | **缓存** | SQLite `embedding_cache` 表 + LRU 淘汰 |
 | **安全重建索引** | 原子重建 FTS5 + 重新嵌入缺失向量 |
 
-Agent 会通过工具自动召回、保存并管理记忆。
+Agent 会通过工具（tools）自动召回、保存并管理记忆。
 
 ```toml
 [memory]
@@ -172,7 +172,7 @@ ZeroClaw 在 **每一层** 都执行安全策略 —— 不仅仅是沙箱。它
 
 > **你可以自行执行 nmap：** `nmap -p 1-65535 <your-host>` —— ZeroClaw 仅绑定 localhost，除非你显式配置隧道，否则不会暴露端口。
 
-### 通道白名单（Telegram / Discord / Slack）
+### 通道白名单（channel allowlists，Telegram / Discord / Slack）
 
 入站发送者策略现已统一：
 
@@ -191,12 +191,12 @@ ZeroClaw 在 **每一层** 都执行安全策略 —— 不仅仅是沙箱。它
 
 如果不确定该用哪个身份值：
 
-1. 启动 channels 并向你的机器人发送一条消息。
+1. 启动通道（channels）并向你的机器人发送一条消息。
 2. 查看 warning 日志中的精确发送者身份。
-3. 将该值加入白名单，然后重新执行 channels-only 设置。
+3. 将该值加入白名单，然后重新执行 channels-only 设置流程。
 
 如果日志中出现授权警告（例如：`ignoring message from unauthorized user`），
-仅重新运行 channel 设置：
+仅重新运行通道（channel）设置：
 
 ```bash
 zeroclaw onboard --channels-only
@@ -353,7 +353,7 @@ aieos_inline = '''
 | `psychology` | 神经矩阵（认知权重）、MBTI、OCEAN、道德罗盘 |
 | `linguistics` | 文本风格、正式度、口头禅、禁用词 |
 | `motivations` | 核心驱动力、短期/长期目标、恐惧 |
-| `capabilities` | Agent 可访问的技能与工具 |
+| `capabilities` | Agent 可访问的技能与工具（tools） |
 | `physicality` | 用于图像生成的视觉描述符 |
 | `history` | 起源故事、教育、职业 |
 | `interests` | 爱好、偏好、生活方式 |
@@ -376,16 +376,16 @@ aieos_inline = '''
 |---------|-------------|
 | `onboard` | 快速设置（默认） |
 | `onboard --interactive` | 完整交互式 7 步向导 |
-| `onboard --channels-only` | 仅重配 channels/allowlists（快速修复流程） |
+| `onboard --channels-only` | 仅重配通道白名单（channels/allowlists）（快速修复流程） |
 | `agent -m "..."` | 单消息模式 |
 | `agent` | 交互聊天模式 |
 | `gateway` | 启动 webhook 服务器（默认：`127.0.0.1:8080`） |
 | `gateway --port 0` | 随机端口模式 |
 | `daemon` | 启动长运行自治运行时 |
 | `service install/start/stop/status/uninstall` | 管理用户级后台服务 |
-| `doctor` | 诊断 daemon/scheduler/channel 新鲜度 |
+| `doctor` | 诊断 daemon/scheduler/通道（channel）新鲜度 |
 | `status` | 显示完整系统状态 |
-| `channel doctor` | 对已配置 channels 执行健康检查 |
+| `channel doctor` | 对已配置通道（channels）执行健康检查 |
 | `integrations info <name>` | 显示单个集成的设置/状态详情 |
 
 ## 开发
