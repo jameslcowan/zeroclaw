@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -50,6 +51,87 @@ pub struct OAuthCredentials {
     pub expires_in: Option<u64>,
     /// Provider name
     pub provider: String,
+}
+
+/// Token response from OAuth token endpoint
+#[derive(Debug, Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    token_type: Option<String>,
+    #[serde(default)]
+    expires_in: Option<u64>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    error_description: Option<String>,
+}
+
+/// Exchange authorization code for access token
+async fn exchange_code_for_token(
+    config: &OAuthConfig,
+    code: &str,
+) -> Result<OAuthCredentials> {
+    use reqwest::header::{CONTENT_TYPE, ACCEPT};
+    use reqwest::Client;
+
+    let client = Client::new();
+
+    // Build form data for token request
+    let mut form_data = HashMap::new();
+    form_data.insert("grant_type", "authorization_code");
+    form_data.insert("code", code);
+    form_data.insert("client_id", &config.client_id);
+    form_data.insert("redirect_uri", &config.redirect_uri);
+
+    // Add client_secret if provided
+    if let Some(secret) = &config.client_secret {
+        form_data.insert("client_secret", secret);
+    }
+
+    // Make POST request to token endpoint
+    let response = client
+        .post(&config.token_url)
+        .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(ACCEPT, "application/json")
+        .form(&form_data)
+        .send()
+        .await
+        .context("Failed to send token request")?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .context("Failed to read token response")?;
+
+    if !status.is_success() {
+        anyhow::bail!(
+            "Token request failed with status {}: {}",
+            status,
+            response_text
+        );
+    }
+
+    // Parse response
+    let token_resp: TokenResponse = serde_json::from_str(&response_text)
+        .with_context(|| format!("Failed to parse token response: {}", response_text))?;
+
+    // Check for error in response body
+    if let Some(error) = token_resp.error {
+        let description = token_resp.error_description.unwrap_or_default();
+        anyhow::bail!("Token exchange error: {} - {}", error, description);
+    }
+
+    Ok(OAuthCredentials {
+        access_token: token_resp.access_token,
+        refresh_token: token_resp.refresh_token,
+        token_type: token_resp.token_type.unwrap_or_else(|| "Bearer".to_string()),
+        expires_in: token_resp.expires_in,
+        provider: config.provider.clone(),
+    })
 }
 
 impl OAuthConfig {
@@ -161,6 +243,7 @@ impl OAuthHandler {
 
         // Callback handler
         let cred_for_handler = Arc::clone(&received_credential);
+        let config_for_handler = self.config.clone();
 
         #[derive(Deserialize)]
         struct CallbackParams {
@@ -171,15 +254,29 @@ impl OAuthHandler {
 
         let app = Router::new().route("/callback", get(move |Query(params): Query<CallbackParams>| {
             let cred = Arc::clone(&cred_for_handler);
+            let config = config_for_handler.clone();
             async move {
                 if let Some(code) = params.code {
-                    // TODO: Exchange code for access token via token_url
-                    let credential = OAuthCredentials {
-                        access_token: code.clone(),
-                        refresh_token: None,
-                        token_type: "Bearer".to_string(),
-                        expires_in: None,
-                        provider: "qwen".to_string(),
+                    // Exchange code for access token via token_url
+                    let credential = match exchange_code_for_token(&config, &code).await {
+                        Ok(creds) => creds,
+                        Err(e) => {
+                            tracing::error!("Failed to exchange code for token: {}", e);
+                            return Html(format!(
+                                r#"
+<!DOCTYPE html>
+<html>
+<head><title>Authentication Failed</title></head>
+<body>
+    <h1>Authentication Failed</h1>
+    <p>Failed to exchange authorization code for access token: {}</p>
+    <p>You can close this window and try again.</p>
+</body>
+</html>
+"#,
+                                e
+                            ));
+                        }
                     };
 
                     *cred.lock().await = Some(credential);
