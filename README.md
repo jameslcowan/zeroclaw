@@ -1,3 +1,5 @@
+**English** | [中文](docs/README_CN.md)
+
 <p align="center">
   <img src="zeroclaw.png" alt="ZeroClaw" width="200" />
 </p>
