@@ -48,6 +48,13 @@ fn whatsapp_memory_key(msg: &crate::channels::traits::ChannelMessage) -> String 
     format!("whatsapp_{}_{}", msg.sender, msg.id)
 }
 
+fn hash_webhook_secret(value: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(value.as_bytes());
+    hex::encode(digest)
+}
+
 /// How often the rate limiter sweeps stale IP entries from its map.
 const RATE_LIMITER_SWEEP_INTERVAL_SECS: u64 = 300; // 5 minutes
 
@@ -179,7 +186,8 @@ pub struct AppState {
     pub temperature: f64,
     pub mem: Arc<dyn Memory>,
     pub auto_save: bool,
-    pub webhook_secret: Option<Arc<str>>,
+    /// SHA-256 hash of `X-Webhook-Secret` (hex-encoded), never plaintext.
+    pub webhook_secret_hash: Option<Arc<str>>,
     pub pairing: Arc<PairingGuard>,
     pub rate_limiter: Arc<GatewayRateLimiter>,
     pub idempotency_store: Arc<IdempotencyStore>,
@@ -252,11 +260,14 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         &config,
     ));
     // Extract webhook secret for authentication
-    let webhook_secret: Option<Arc<str>> = config
+    let webhook_secret_hash: Option<Arc<str>> = config
         .channels_config
         .webhook
         .as_ref()
         .and_then(|w| w.secret.as_deref())
+        .map(str::trim)
+        .filter(|secret| !secret.is_empty())
+        .map(hash_webhook_secret)
         .map(Arc::from);
 
     // WhatsApp channel (if configured)
@@ -343,7 +354,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
     } else {
         println!("  ⚠️  Pairing: DISABLED (all requests accepted)");
     }
-    if webhook_secret.is_some() {
+    if webhook_secret_hash.is_some() {
         println!("  🔒 Webhook secret: ENABLED");
     }
     println!("  Press Ctrl+C to stop.\n");
@@ -357,7 +368,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         temperature,
         mem,
         auto_save: config.memory.auto_save,
-        webhook_secret,
+        webhook_secret_hash,
         pairing,
         rate_limiter,
         idempotency_store,
@@ -483,12 +494,15 @@ async fn handle_webhook(
     }
 
     // ── Webhook secret auth (optional, additional layer) ──
-    if let Some(ref secret) = state.webhook_secret {
-        let header_val = headers
+    if let Some(ref secret_hash) = state.webhook_secret_hash {
+        let header_hash = headers
             .get("X-Webhook-Secret")
-            .and_then(|v| v.to_str().ok());
-        match header_val {
-            Some(val) if constant_time_eq(val, secret.as_ref()) => {}
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(hash_webhook_secret);
+        match header_hash {
+            Some(val) if constant_time_eq(&val, secret_hash.as_ref()) => {}
             _ => {
                 tracing::warn!("Webhook: rejected request — invalid or missing X-Webhook-Secret");
                 let err = serde_json::json!({"error": "Unauthorized — invalid or missing X-Webhook-Secret header"});
@@ -992,7 +1006,7 @@ mod tests {
             temperature: 0.0,
             mem: memory,
             auto_save: false,
-            webhook_secret: None,
+            webhook_secret_hash: None,
             pairing: Arc::new(PairingGuard::new(false, &[])),
             rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100)),
             idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300))),
@@ -1040,7 +1054,7 @@ mod tests {
             temperature: 0.0,
             mem: memory,
             auto_save: true,
-            webhook_secret: None,
+            webhook_secret_hash: None,
             pairing: Arc::new(PairingGuard::new(false, &[])),
             rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100)),
             idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300))),
@@ -1076,6 +1090,125 @@ mod tests {
         assert!(keys[0].starts_with("webhook_msg_"));
         assert!(keys[1].starts_with("webhook_msg_"));
         assert_eq!(provider_impl.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn webhook_secret_hash_is_deterministic_and_nonempty() {
+        let one = hash_webhook_secret("secret-value");
+        let two = hash_webhook_secret("secret-value");
+        let other = hash_webhook_secret("other-value");
+
+        assert_eq!(one, two);
+        assert_ne!(one, other);
+        assert_eq!(one.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn webhook_secret_hash_rejects_missing_header() {
+        let provider_impl = Arc::new(MockProvider::default());
+        let provider: Arc<dyn Provider> = provider_impl.clone();
+        let memory: Arc<dyn Memory> = Arc::new(MockMemory);
+
+        let state = AppState {
+            provider,
+            model: "test-model".into(),
+            temperature: 0.0,
+            mem: memory,
+            auto_save: false,
+            webhook_secret_hash: Some(Arc::from(hash_webhook_secret("super-secret"))),
+            pairing: Arc::new(PairingGuard::new(false, &[])),
+            rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100)),
+            idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300))),
+            whatsapp: None,
+            whatsapp_app_secret: None,
+        };
+
+        let response = handle_webhook(
+            State(state),
+            HeaderMap::new(),
+            Ok(Json(WebhookBody {
+                message: "hello".into(),
+            })),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(provider_impl.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn webhook_secret_hash_rejects_invalid_header() {
+        let provider_impl = Arc::new(MockProvider::default());
+        let provider: Arc<dyn Provider> = provider_impl.clone();
+        let memory: Arc<dyn Memory> = Arc::new(MockMemory);
+
+        let state = AppState {
+            provider,
+            model: "test-model".into(),
+            temperature: 0.0,
+            mem: memory,
+            auto_save: false,
+            webhook_secret_hash: Some(Arc::from(hash_webhook_secret("super-secret"))),
+            pairing: Arc::new(PairingGuard::new(false, &[])),
+            rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100)),
+            idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300))),
+            whatsapp: None,
+            whatsapp_app_secret: None,
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Webhook-Secret", HeaderValue::from_static("wrong-secret"));
+
+        let response = handle_webhook(
+            State(state),
+            headers,
+            Ok(Json(WebhookBody {
+                message: "hello".into(),
+            })),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(provider_impl.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn webhook_secret_hash_accepts_valid_header() {
+        let provider_impl = Arc::new(MockProvider::default());
+        let provider: Arc<dyn Provider> = provider_impl.clone();
+        let memory: Arc<dyn Memory> = Arc::new(MockMemory);
+
+        let state = AppState {
+            provider,
+            model: "test-model".into(),
+            temperature: 0.0,
+            mem: memory,
+            auto_save: false,
+            webhook_secret_hash: Some(Arc::from(hash_webhook_secret("super-secret"))),
+            pairing: Arc::new(PairingGuard::new(false, &[])),
+            rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100)),
+            idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300))),
+            whatsapp: None,
+            whatsapp_app_secret: None,
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Webhook-Secret", HeaderValue::from_static("super-secret"));
+
+        let response = handle_webhook(
+            State(state),
+            headers,
+            Ok(Json(WebhookBody {
+                message: "hello".into(),
+            })),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(provider_impl.calls.load(Ordering::SeqCst), 1);
     }
 
     // ══════════════════════════════════════════════════════════
