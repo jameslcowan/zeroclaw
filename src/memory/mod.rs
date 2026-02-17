@@ -146,10 +146,7 @@ pub fn create_memory_for_migration(
 }
 
 /// Factory: create an optional response cache from config.
-pub fn create_response_cache(
-    config: &MemoryConfig,
-    workspace_dir: &Path,
-) -> Option<ResponseCache> {
+pub fn create_response_cache(config: &MemoryConfig, workspace_dir: &Path) -> Option<ResponseCache> {
     if !config.response_cache_enabled {
         return None;
     }
