@@ -9,9 +9,12 @@
 
 services:
   zeroclaw:
-    image: ghcr.io/zeroclaw-labs/zeroclaw:latest
-    # Or build locally:
-    # build: .
+    # Build locally by default to avoid registry-auth dependency during first-time setup.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Optional prebuilt image path (uncomment to use GHCR image directly):
+    # image: ghcr.io/zeroclaw-labs/zeroclaw:latest
     container_name: zeroclaw
     restart: unless-stopped
     
