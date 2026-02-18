@@ -8,7 +8,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: pr-hygiene
+  group: pr-check-status
   cancel-in-progress: true
 
 jobs:

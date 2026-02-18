@@ -205,7 +205,7 @@ jobs:
                   DOCS_RESULT: ${{ needs.docs-quality.result }}
               with:
                   script: |
-                      const script = require('./scripts/ci/lint_feedback.js');
+                      const script = require('./.github/workflows/scripts/lint_feedback.js');
                       await script({github, context, core});
 
     workflow-owner-approval:

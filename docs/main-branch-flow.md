@@ -11,11 +11,11 @@ Use this with:
 
 | Event | Main workflows |
 | --- | --- |
-| PR activity (`pull_request_target`) | `pr-intake-sanity.yml`, `pr-labeler.yml`, `auto-response.yml` |
-| PR activity (`pull_request`) | `ci.yml`, `security.yml`, plus path-scoped `docker.yml`, `workflow-sanity.yml`, `label-policy-sanity.yml` |
-| Push to `main` | `ci.yml`, `security.yml`, plus path-scoped workflows |
-| Tag push (`v*`) | `release.yml`, `docker.yml` publish job |
-| Scheduled/manual | `codeql.yml`, `feature-matrix.yml`, `fuzz.yml`, `pr-check-stale.yml`, `pr-hygiene.yml`, `update-notice.yml`, `benchmarks.yml`, `e2e.yml` |
+| PR activity (`pull_request_target`) | `pr-intake-checks.yml`, `pr-labeler.yml`, `pr-auto-response.yml` |
+| PR activity (`pull_request`) | `ci-run.yml`, `sec-audit.yml`, plus path-scoped `pub-docker-img.yml`, `workflow-sanity.yml`, `pr-label-policy-check.yml` |
+| Push to `main` | `ci-run.yml`, `sec-audit.yml`, plus path-scoped workflows |
+| Tag push (`v*`) | `pub-release.yml`, `pub-docker-img.yml` publish job |
+| Scheduled/manual | `sec-codeql.yml`, `feature-matrix.yml`, `test-fuzz.yml`, `pr-check-stale.yml`, `pr-check-status.yml`, `sync-contributors.yml`, `test-benchmarks.yml`, `test-e2e.yml` |
 
 ## Runtime and Docker Matrix
 
@@ -23,23 +23,23 @@ Observed averages below are from recent completed runs (sampled from GitHub Acti
 
 | Workflow | Typical trigger in main flow | Avg runtime | Docker build? | Docker run? | Docker push? |
 | --- | --- | ---:| --- | --- | --- |
-| `pr-intake-sanity.yml` | PR open/update (`pull_request_target`) | 14.5s | No | No | No |
+| `pr-intake-checks.yml` | PR open/update (`pull_request_target`) | 14.5s | No | No | No |
 | `pr-labeler.yml` | PR open/update (`pull_request_target`) | 53.7s | No | No | No |
-| `auto-response.yml` | PR/issue automation | 24.3s | No | No | No |
-| `ci.yml` | PR + push to `main` | 74.7s | No | No | No |
-| `security.yml` | PR + push to `main` | 127.2s | No | No | No |
+| `pr-auto-response.yml` | PR/issue automation | 24.3s | No | No | No |
+| `ci-run.yml` | PR + push to `main` | 74.7s | No | No | No |
+| `sec-audit.yml` | PR + push to `main` | 127.2s | No | No | No |
 | `workflow-sanity.yml` | Workflow-file changes | 34.2s | No | No | No |
-| `label-policy-sanity.yml` | Label policy/automation changes | 14.7s | No | No | No |
-| `docker.yml` (`pull_request`) | Docker-related PR changes | 240.4s | Yes | Yes | No |
-| `docker.yml` (`push` tag) | Tag push `v*` | 139.9s | Yes | No | Yes |
-| `release.yml` | Tag push `v*` | N/A in recent sample | No | No | No |
+| `pr-label-policy-check.yml` | Label policy/automation changes | 14.7s | No | No | No |
+| `pub-docker-img.yml` (`pull_request`) | Docker-related PR changes | 240.4s | Yes | Yes | No |
+| `pub-docker-img.yml` (`push` tag) | Tag push `v*` | 139.9s | Yes | No | Yes |
+| `pub-release.yml` | Tag push `v*` | N/A in recent sample | No | No | No |
 
 Notes:
 
-1. `docker.yml` is the only workflow in the main PR/push path that builds Docker images.
+1. `pub-docker-img.yml` is the only workflow in the main PR/push path that builds Docker images.
 2. Container runtime verification (`docker run`) occurs in PR smoke only.
 3. Container registry push occurs on tag pushes only.
-4. `ci.yml` "Build (Smoke)" builds Rust binaries, not Docker images.
+4. `ci-run.yml` "Build (Smoke)" builds Rust binaries, not Docker images.
 
 ## Step-By-Step
 
@@ -47,17 +47,17 @@ Notes:
 
 1. Contributor opens or updates PR against `main`.
 2. `pull_request_target` automation runs (typical runtime):
-   - `pr-intake-sanity.yml` posts intake warnings/errors.
+   - `pr-intake-checks.yml` posts intake warnings/errors.
    - `pr-labeler.yml` sets size/risk/scope labels.
-   - `auto-response.yml` runs first-interaction and label routes.
+   - `pr-auto-response.yml` runs first-interaction and label routes.
 3. `pull_request` CI workflows start:
-   - `ci.yml`
-   - `security.yml`
+   - `ci-run.yml`
+   - `sec-audit.yml`
    - path-scoped workflows if matching files changed:
-     - `docker.yml` (Docker-related paths only)
+     - `pub-docker-img.yml` (Docker-related paths only)
      - `workflow-sanity.yml` (workflow files only)
-     - `label-policy-sanity.yml` (label-policy files only)
-4. In `ci.yml`, `changes` computes:
+     - `pr-label-policy-check.yml` (label-policy files only)
+4. In `ci-run.yml`, `changes` computes:
    - `docs_only`
    - `docs_changed`
    - `rust_changed`
@@ -79,13 +79,13 @@ Notes:
 1. External contributor opens PR from `fork/<branch>` into `zeroclaw:main`.
 2. Immediately on `opened`:
    - `pull_request_target` workflows start with base-repo context and base-repo token:
-     - `pr-intake-sanity.yml`
+     - `pr-intake-checks.yml`
      - `pr-labeler.yml`
-     - `auto-response.yml`
+     - `pr-auto-response.yml`
    - `pull_request` workflows are queued for the fork head commit:
-     - `ci.yml`
-     - `security.yml`
-     - path-scoped workflows (`docker.yml`, `workflow-sanity.yml`, `label-policy-sanity.yml`) if changed files match.
+     - `ci-run.yml`
+     - `sec-audit.yml`
+     - path-scoped workflows (`pub-docker-img.yml`, `workflow-sanity.yml`, `pr-label-policy-check.yml`) if changed files match.
 3. Fork-specific permission behavior in `pull_request` workflows:
    - token is restricted (read-focused), so jobs that try to write PR comments/status extras can be limited.
    - secrets from the base repo are not exposed to fork PR `pull_request` jobs.
@@ -93,11 +93,11 @@ Notes:
    - if Actions settings require maintainer approval for fork workflows, the `pull_request` run stays in `action_required`/waiting state until approved.
 5. Event fan-out after labeling:
    - `pr-labeler.yml` and manual label changes emit `labeled`/`unlabeled` events.
-   - those events retrigger `pull_request_target` automation (`pr-labeler.yml` and `auto-response.yml`), creating extra run volume/noise.
+   - those events retrigger `pull_request_target` automation (`pr-labeler.yml` and `pr-auto-response.yml`), creating extra run volume/noise.
 6. When contributor pushes new commits to fork branch (`synchronize`):
-   - reruns: `pr-intake-sanity.yml`, `pr-labeler.yml`, `ci.yml`, `security.yml`, and matching path-scoped PR workflows.
-   - does not rerun `auto-response.yml` unless label/open events occur.
-7. `ci.yml` execution details for fork PR:
+   - reruns: `pr-intake-checks.yml`, `pr-labeler.yml`, `ci-run.yml`, `sec-audit.yml`, and matching path-scoped PR workflows.
+   - does not rerun `pr-auto-response.yml` unless label/open events occur.
+7. `ci-run.yml` execution details for fork PR:
    - `changes` computes `docs_only`, `docs_changed`, `rust_changed`, `workflow_changed`.
    - `build` runs for Rust-impacting changes.
    - `lint`/`lint-strict-delta`/`test`/`docs-quality` run on PR when `ci:full` label exists.
@@ -113,17 +113,17 @@ Notes:
 ### 3) Push to `main` (including after merge)
 
 1. Commit reaches `main` (usually from a merged PR).
-2. `ci.yml` runs on `push`.
-3. `security.yml` runs on `push`.
+2. `ci-run.yml` runs on `push`.
+3. `sec-audit.yml` runs on `push`.
 4. Path-filtered workflows run only if touched files match their filters.
-5. In `ci.yml`, push behavior differs from PR behavior:
+5. In `ci-run.yml`, push behavior differs from PR behavior:
    - Rust path: `lint`, `lint-strict-delta`, `test`, `build` are expected.
    - Docs/non-rust paths: fast-path behavior applies.
 6. `CI Required Gate` computes overall push result.
 
 ## Docker Publish Logic
 
-Workflow: `.github/workflows/docker.yml`
+Workflow: `.github/workflows/pub-docker-img.yml`
 
 ### PR behavior
 
@@ -150,7 +150,7 @@ Important: Docker publish does not run on plain `main` pushes anymore.
 
 ## Release Logic
 
-Workflow: `.github/workflows/release.yml`
+Workflow: `.github/workflows/pub-release.yml`
 
 1. Triggered only on tag push `v*`.
 2. Builds release artifacts across matrix targets.
@@ -161,10 +161,10 @@ Workflow: `.github/workflows/release.yml`
 
 ## Merge/Policy Notes
 
-1. Workflow-file changes (`.github/workflows/**`) activate owner-approval gate in `ci.yml`.
+1. Workflow-file changes (`.github/workflows/**`) activate owner-approval gate in `ci-run.yml`.
 2. PR lint/test strictness is intentionally controlled by `ci:full` label.
-3. `security.yml` runs on both PR and push, plus scheduled weekly.
-4. Some workflows are operational and non-merge-path (`pr-check-stale`, `pr-hygiene`, `update-notice`, etc.).
+3. `sec-audit.yml` runs on both PR and push, plus scheduled weekly.
+4. Some workflows are operational and non-merge-path (`pr-check-stale`, `pr-check-status`, `sync-contributors`, etc.).
 5. Workflow-specific JavaScript helpers are organized under `.github/workflows/scripts/`.
 
 ## Mermaid Diagrams
@@ -174,15 +174,15 @@ Workflow: `.github/workflows/release.yml`
 ```mermaid
 flowchart TD
   A["PR opened or updated -> main"] --> B["pull_request_target lane"]
-  B --> B1["pr-intake-sanity.yml"]
+  B --> B1["pr-intake-checks.yml"]
   B --> B2["pr-labeler.yml"]
-  B --> B3["auto-response.yml"]
+  B --> B3["pr-auto-response.yml"]
   A --> C["pull_request CI lane"]
-  C --> C1["ci.yml"]
-  C --> C2["security.yml"]
-  C --> C3["docker.yml (if Docker paths changed)"]
+  C --> C1["ci-run.yml"]
+  C --> C2["sec-audit.yml"]
+  C --> C3["pub-docker-img.yml (if Docker paths changed)"]
   C --> C4["workflow-sanity.yml (if workflow files changed)"]
-  C --> C5["label-policy-sanity.yml (if policy files changed)"]
+  C --> C5["pr-label-policy-check.yml (if policy files changed)"]
   C1 --> D["CI Required Gate"]
   D --> E{"Checks + review policy pass?"}
   E -->|No| F["PR stays open"]
@@ -194,11 +194,11 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  A["Commit reaches main"] --> B["ci.yml"]
-  A --> C["security.yml"]
+  A["Commit reaches main"] --> B["ci-run.yml"]
+  A --> C["sec-audit.yml"]
   A --> D["path-scoped workflows (if matched)"]
-  T["Tag push v*"] --> R["release.yml"]
-  T --> P["docker.yml publish job"]
+  T["Tag push v*"] --> R["pub-release.yml"]
+  T --> P["pub-docker-img.yml publish job"]
   R --> R1["Artifacts + SBOM + checksums + signatures + GitHub Release"]
   P --> P1["Push ghcr image tags (version + sha)"]
 ```

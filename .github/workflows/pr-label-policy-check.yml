@@ -5,15 +5,15 @@ on:
         paths:
             - ".github/label-policy.json"
             - ".github/workflows/pr-labeler.yml"
-            - ".github/workflows/auto-response.yml"
+            - ".github/workflows/pr-auto-response.yml"
     push:
         paths:
             - ".github/label-policy.json"
             - ".github/workflows/pr-labeler.yml"
-            - ".github/workflows/auto-response.yml"
+            - ".github/workflows/pr-auto-response.yml"
 
 concurrency:
-    group: label-policy-sanity-${{ github.event.pull_request.number || github.sha }}
+    group: pr-label-policy-check-${{ github.event.pull_request.number || github.sha }}
     cancel-in-progress: true
 
 permissions:
@@ -61,7 +61,7 @@ jobs:
 
                   workflow_paths = [
                     Path('.github/workflows/pr-labeler.yml'),
-                    Path('.github/workflows/auto-response.yml'),
+                    Path('.github/workflows/pr-auto-response.yml'),
                   ]
                   for workflow in workflow_paths:
                     text = workflow.read_text(encoding='utf-8')

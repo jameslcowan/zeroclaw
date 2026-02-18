@@ -5,7 +5,7 @@ on:
         types: [opened, reopened, synchronize, edited, ready_for_review]
 
 concurrency:
-    group: pr-intake-sanity-${{ github.event.pull_request.number || github.run_id }}
+    group: pr-intake-checks-${{ github.event.pull_request.number || github.run_id }}
     cancel-in-progress: true
 
 permissions:

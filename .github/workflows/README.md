@@ -17,3 +17,4 @@ Current workflow helper scripts:
 
 - `.github/workflows/scripts/pr_intake_sanity.js`
 - `.github/workflows/scripts/pr_labeler.js`
+- `.github/workflows/scripts/lint_feedback.js`

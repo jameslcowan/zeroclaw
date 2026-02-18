@@ -1,5 +1,5 @@
 // Run safe intake checks for PR events and maintain a single sticky comment.
-// Used by .github/workflows/pr-intake-sanity.yml via actions/github-script.
+// Used by .github/workflows/pr-intake-checks.yml via actions/github-script.
 
 module.exports = async ({ github, context, core }) => {
   const owner = context.repo.owner;
@@ -7,7 +7,8 @@ module.exports = async ({ github, context, core }) => {
   const pr = context.payload.pull_request;
   if (!pr) return;
 
-  const marker = "<!-- pr-intake-sanity -->";
+  const marker = "<!-- pr-intake-checks -->";
+  const legacyMarker = "<!-- pr-intake-sanity -->";
   const requiredSections = [
     "## Summary",
     "## Validation Evidence (required)",
@@ -89,7 +90,10 @@ module.exports = async ({ github, context, core }) => {
     issue_number: pr.number,
     per_page: 100,
   });
-  const existing = comments.find((comment) => (comment.body || "").includes(marker));
+  const existing = comments.find((comment) => {
+    const body = comment.body || "";
+    return body.includes(marker) || body.includes(legacyMarker);
+  });
 
   if (advisoryFindings.length === 0 && blockingFindings.length === 0) {
     if (existing) {
