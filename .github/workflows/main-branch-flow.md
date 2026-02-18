@@ -4,8 +4,8 @@ This document explains what runs when code is proposed to `main`, merged into `m
 
 Use this with:
 
-- [`docs/ci-map.md`](ci-map.md)
-- [`docs/pr-workflow.md`](pr-workflow.md)
+- [`docs/ci-map.md`](../../docs/ci-map.md)
+- [`docs/pr-workflow.md`](../../docs/pr-workflow.md)
 
 ## Event Summary
 

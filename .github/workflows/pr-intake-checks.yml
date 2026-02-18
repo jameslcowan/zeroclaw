@@ -26,5 +26,5 @@ jobs:
               uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
               with:
                   script: |
-                      const script = require('./.github/workflows/scripts/pr_intake_sanity.js');
+                      const script = require('./.github/workflows/scripts/pr_intake_checks.js');
                       await script({ github, context, core });
