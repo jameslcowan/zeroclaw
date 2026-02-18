@@ -1,5 +1,6 @@
 use crate::config::Config;
-use anyhow::Result;
+use crate::security::SecurityPolicy;
+use anyhow::{bail, Result};
 
 mod schedule;
 mod store;
@@ -93,6 +94,36 @@ pub fn handle_command(command: crate::CronCommands, config: &Config) -> Result<(
             let job = add_once(config, &delay, &command)?;
             println!("✅ Added one-shot cron job {}", job.id);
             println!("  At  : {}", job.next_run.to_rfc3339());
+            println!("  Cmd : {}", job.command);
+            Ok(())
+        }
+        crate::CronCommands::Update {
+            id,
+            expression,
+            tz,
+            command,
+            name,
+        } => {
+            let schedule = expression.map(|expr| Schedule::Cron { expr, tz });
+
+            if let Some(ref cmd) = command {
+                let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+                if !security.is_command_allowed(cmd) {
+                    bail!("Command blocked by security policy: {cmd}");
+                }
+            }
+
+            let patch = CronJobPatch {
+                schedule,
+                command,
+                name,
+                ..CronJobPatch::default()
+            };
+
+            let job = update_job(config, &id, patch)?;
+            println!("Updated cron job {}", job.id);
+            println!("  Expr: {}", job.expression);
+            println!("  Next: {}", job.next_run.to_rfc3339());
             println!("  Cmd : {}", job.command);
             Ok(())
         }
