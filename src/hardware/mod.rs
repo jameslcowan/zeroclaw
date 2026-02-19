@@ -2,13 +2,29 @@
 //!
 //! See `docs/hardware-peripherals-design.md` for the full design.
 
+pub mod device;
+pub mod protocol;
 pub mod registry;
+pub mod transport;
 
 #[cfg(feature = "hardware")]
 pub mod discover;
 
 #[cfg(feature = "hardware")]
 pub mod introspect;
+
+#[cfg(feature = "hardware")]
+pub mod serial;
+
+pub mod gpio;
+
+pub use device::{Device, DeviceCapabilities, DeviceContext, DeviceKind, DeviceRegistry};
+pub use gpio::{gpio_tools, GpioReadTool, GpioWriteTool};
+pub use protocol::{ZcCommand, ZcResponse};
+pub use transport::{Transport, TransportError, TransportKind};
+
+#[cfg(feature = "hardware")]
+pub use serial::HardwareSerialTransport;
 
 use crate::config::Config;
 use anyhow::Result;
