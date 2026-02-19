@@ -10,6 +10,10 @@ Last verified: **February 20, 2026**.
 brew install zeroclaw
 ```
 
+## Compilation Requirements
+
+Building from source requires approximately **2 GB of RAM + swap** and **5 GB of disk space**. Devices with less than 2 GB RAM should add swap, cross-compile, or download a [pre-built binary](https://github.com/zeroclaw-labs/zeroclaw/releases) instead. See [troubleshooting](troubleshooting.md#build-fails-with-out-of-memory-oom) for details.
+
 ## Option A (Recommended): Clone + local script
 
 ```bash
