@@ -35,23 +35,26 @@ fn split_message_for_telegram(message: &str) -> Vec<String> {
         let chunk_end = if hard_split == remaining.len() {
             hard_split
         } else {
+            // Ensure we never slice in the middle of a multi-byte UTF-8 char.
+            let safe_limit = remaining.floor_char_boundary(TELEGRAM_MAX_MESSAGE_LENGTH);
+
             // Try to find a good break point (newline, then space)
-            let search_area = &remaining[..hard_split];
+            let search_area = &remaining[..safe_limit];
 
             // Prefer splitting at newline
             if let Some(pos) = search_area.rfind('\n') {
                 // Don't split if the newline is too close to the start
-                if search_area[..pos].chars().count() >= TELEGRAM_MAX_MESSAGE_LENGTH / 2 {
+                if pos >= safe_limit / 2 {
                     pos + 1
                 } else {
                     // Try space as fallback
-                    search_area.rfind(' ').unwrap_or(hard_split) + 1
+                    search_area.rfind(' ').unwrap_or(safe_limit) + 1
                 }
             } else if let Some(pos) = search_area.rfind(' ') {
                 pos + 1
             } else {
-                // Hard split at character boundary
-                hard_split
+                // Hard split at the safe limit
+                safe_limit
             }
         };
 
