@@ -117,6 +117,10 @@ impl Transport for HardwareSerialTransport {
             )));
         }
 
+        let json = serde_json::to_string(cmd)
+            .unwrap_or_else(|_| "<serialize-error>".to_string());
+        tracing::info!(port = %self.port_path, cmd = %json, "serial send");
+
         tokio::time::timeout(
             std::time::Duration::from_secs(SEND_TIMEOUT_SECS),
             do_send(&self.port_path, self.baud_rate, cmd),

@@ -52,19 +52,62 @@ pub struct HardwareBootResult {
 
 /// Boot the hardware subsystem: discover devices + load tool registry.
 ///
-/// With the `hardware` feature: enumerates USB-serial devices, registers them
-/// in a [`DeviceRegistry`], and loads GPIO + plugin tools.
+/// With the `hardware` feature: enumerates USB-serial devices, then
+/// pre-registers any config-specified serial boards not already found by
+/// discovery. [`HardwareSerialTransport`] opens the port lazily per-send,
+/// so this succeeds even when the port doesn't exist at startup.
 ///
 /// Without the feature: loads plugin tools from `~/.zeroclaw/tools/` only,
 /// with an empty device registry (GPIO tools will report "no device found"
 /// if called, which is correct).
-///
-/// Plugin loading errors are logged as warnings and never abort boot.
 #[cfg(feature = "hardware")]
-pub async fn boot() -> anyhow::Result<HardwareBootResult> {
-    let devices = std::sync::Arc::new(
-        tokio::sync::RwLock::new(DeviceRegistry::discover().await),
-    );
+pub async fn boot(peripherals: &crate::config::PeripheralsConfig) -> anyhow::Result<HardwareBootResult> {
+    use device::DeviceCapabilities;
+
+    let mut registry_inner = DeviceRegistry::discover().await;
+
+    // Pre-register config-specified serial boards not already found by USB
+    // discovery. Transport opens lazily, so the port need not exist at boot.
+    if peripherals.enabled {
+        let discovered_paths: std::collections::HashSet<String> = registry_inner
+            .all()
+            .iter()
+            .filter_map(|d| d.device_path.clone())
+            .collect();
+
+        for board in &peripherals.boards {
+            if board.transport != "serial" {
+                continue;
+            }
+            let path = match &board.path {
+                Some(p) if !p.is_empty() => p.clone(),
+                _ => continue,
+            };
+            if discovered_paths.contains(&path) {
+                continue; // already registered by USB discovery
+            }
+            let alias = registry_inner.register(
+                &board.board,
+                None,
+                None,
+                Some(path.clone()),
+                None,
+            );
+            let transport = std::sync::Arc::new(
+                HardwareSerialTransport::new(&path, board.baud),
+            ) as std::sync::Arc<dyn transport::Transport>;
+            let caps = DeviceCapabilities { gpio: true, ..DeviceCapabilities::default() };
+            registry_inner.attach_transport(&alias, transport, caps);
+            tracing::info!(
+                board = %board.board,
+                path = %path,
+                alias = %alias,
+                "pre-registered config board with lazy serial transport"
+            );
+        }
+    }
+
+    let devices = std::sync::Arc::new(tokio::sync::RwLock::new(registry_inner));
     let registry = ToolRegistry::load(devices.clone()).await?;
     let device_summary = {
         let reg = devices.read().await;
@@ -82,7 +125,7 @@ pub async fn boot() -> anyhow::Result<HardwareBootResult> {
 
 /// Fallback when the `hardware` feature is disabled — plugins only.
 #[cfg(not(feature = "hardware"))]
-pub async fn boot() -> anyhow::Result<HardwareBootResult> {
+pub async fn boot(_peripherals: &crate::config::PeripheralsConfig) -> anyhow::Result<HardwareBootResult> {
     let devices = std::sync::Arc::new(
         tokio::sync::RwLock::new(DeviceRegistry::new()),
     );

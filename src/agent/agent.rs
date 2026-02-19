@@ -271,7 +271,7 @@ impl Agent {
         }
 
         // ── Hardware registry tools (Phase 4 ToolRegistry + plugins) ──
-        let hw_boot = crate::hardware::boot().await?;
+        let hw_boot = crate::hardware::boot(&config.peripherals).await?;
         if !hw_boot.tools.is_empty() {
             let existing: std::collections::HashSet<String> =
                 tools.iter().map(|t| t.name().to_string()).collect();

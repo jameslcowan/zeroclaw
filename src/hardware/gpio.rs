@@ -69,15 +69,11 @@ impl Tool for GpioWriteTool {
                     "description": "1 = HIGH (on), 0 = LOW (off)"
                 }
             },
-            "required": ["device", "pin", "value"]
+            "required": ["pin", "value"]
         })
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let device_alias = args
-            .get("device")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: device"))?;
         let pin = args
             .get("pin")
             .and_then(|v| v.as_u64())
@@ -96,7 +92,49 @@ impl Tool for GpioWriteTool {
         }
 
         let registry = self.registry.read().await;
-        let ctx = registry.context(device_alias).ok_or_else(|| {
+
+        // Resolve device alias: use provided value or auto-select the sole GPIO device.
+        let device_alias: String = match args.get("device").and_then(|v| v.as_str()) {
+            Some(a) => a.to_string(),
+            None => {
+                let gpio_aliases: Vec<String> = registry
+                    .aliases()
+                    .into_iter()
+                    .filter(|a| {
+                        registry
+                            .context(a)
+                            .map(|c| c.capabilities.gpio)
+                            .unwrap_or(false)
+                    })
+                    .map(|a| a.to_string())
+                    .collect();
+                match gpio_aliases.as_slice() {
+                    [single] => single.clone(),
+                    [] => {
+                        return Ok(ToolResult {
+                            success: false,
+                            output: String::new(),
+                            error: Some(
+                                "no GPIO-capable device found; specify \"device\" parameter"
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                    _ => {
+                        return Ok(ToolResult {
+                            success: false,
+                            output: String::new(),
+                            error: Some(format!(
+                                "multiple devices available ({}); specify \"device\" parameter",
+                                gpio_aliases.join(", ")
+                            )),
+                        });
+                    }
+                }
+            }
+        };
+
+        let ctx = registry.context(&device_alias).ok_or_else(|| {
             anyhow::anyhow!(
                 "device '{}' not found or has no transport attached",
                 device_alias
@@ -174,22 +212,60 @@ impl Tool for GpioReadTool {
                     "description": "GPIO pin number to read"
                 }
             },
-            "required": ["device", "pin"]
+            "required": ["pin"]
         })
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let device_alias = args
-            .get("device")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: device"))?;
         let pin = args
             .get("pin")
             .and_then(|v| v.as_u64())
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: pin"))?;
 
         let registry = self.registry.read().await;
-        let ctx = registry.context(device_alias).ok_or_else(|| {
+
+        // Resolve device alias: use provided value or auto-select the sole GPIO device.
+        let device_alias: String = match args.get("device").and_then(|v| v.as_str()) {
+            Some(a) => a.to_string(),
+            None => {
+                let gpio_aliases: Vec<String> = registry
+                    .aliases()
+                    .into_iter()
+                    .filter(|a| {
+                        registry
+                            .context(a)
+                            .map(|c| c.capabilities.gpio)
+                            .unwrap_or(false)
+                    })
+                    .map(|a| a.to_string())
+                    .collect();
+                match gpio_aliases.as_slice() {
+                    [single] => single.clone(),
+                    [] => {
+                        return Ok(ToolResult {
+                            success: false,
+                            output: String::new(),
+                            error: Some(
+                                "no GPIO-capable device found; specify \"device\" parameter"
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                    _ => {
+                        return Ok(ToolResult {
+                            success: false,
+                            output: String::new(),
+                            error: Some(format!(
+                                "multiple devices available ({}); specify \"device\" parameter",
+                                gpio_aliases.join(", ")
+                            )),
+                        });
+                    }
+                }
+            }
+        };
+
+        let ctx = registry.context(&device_alias).ok_or_else(|| {
             anyhow::anyhow!(
                 "device '{}' not found or has no transport attached",
                 device_alias

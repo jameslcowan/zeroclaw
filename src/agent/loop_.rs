@@ -1060,6 +1060,7 @@ pub(crate) async fn run_tool_call_loop(
             });
             let start = Instant::now();
             let result = if let Some(tool) = find_tool(tools_registry, &call.name) {
+                tracing::info!(tool = %call.name, args = %call.arguments, "dispatching tool");
                 match tool.execute(call.arguments.clone()).await {
                     Ok(r) => {
                         observer.record_event(&ObserverEvent::ToolCall {
@@ -1213,7 +1214,9 @@ pub async fn run(
     }
 
     // ── Hardware registry tools (Phase 4 ToolRegistry + plugins) ──
-    let hw_boot = crate::hardware::boot().await?;
+    let hw_boot = crate::hardware::boot(&config.peripherals).await?;
+    let hw_device_summary = hw_boot.device_summary.clone();
+    let mut hw_added_tool_names: Vec<String> = Vec::new();
     if !hw_boot.tools.is_empty() {
         // Deduplicate: peripheral tools take precedence for names like gpio_read/gpio_write.
         let existing: std::collections::HashSet<String> =
@@ -1224,6 +1227,7 @@ pub async fn run(
             .filter(|t| !existing.contains(t.name()))
             .collect();
         if !new_hw_tools.is_empty() {
+            hw_added_tool_names = new_hw_tools.iter().map(|t| t.name().to_string()).collect();
             tracing::info!(count = new_hw_tools.len(), "Hardware registry tools added");
             tools_registry.extend(new_hw_tools);
         }
@@ -1353,33 +1357,35 @@ pub async fn run(
     if config.peripherals.enabled && !config.peripherals.boards.is_empty() {
         tool_descs.push((
             "gpio_read",
-            "Read GPIO pin value (0 or 1) on connected hardware (STM32, Arduino). Use when: checking sensor/button state, LED status.",
+            "Read the current state of a GPIO pin (returns 0 or 1). Use when: checking sensor/button state, LED status.",
         ));
         tool_descs.push((
             "gpio_write",
-            "Set GPIO pin high (1) or low (0) on connected hardware. Use when: turning LED on/off, controlling actuators.",
+            "Set a GPIO pin HIGH (1) or LOW (0). Use this to turn on/off LEDs and control output pins. Example: gpio_write(device=pico0, pin=25, value=1) turns on the Pico onboard LED.",
         ));
         tool_descs.push((
             "arduino_upload",
             "Upload agent-generated Arduino sketch. Use when: user asks for 'make a heart', 'blink pattern', or custom LED behavior on Arduino. You write the full .ino code; ZeroClaw compiles and uploads it. Pin 13 = built-in LED on Uno.",
         ));
-        tool_descs.push((
-            "hardware_memory_map",
-            "Return flash and RAM address ranges for connected hardware. Use when: user asks for 'upper and lower memory addresses', 'memory map', or 'readable addresses'.",
-        ));
-        tool_descs.push((
-            "hardware_board_info",
-            "Return full board info (chip, architecture, memory map) for connected hardware. Use when: user asks for 'board info', 'what board do I have', 'connected hardware', 'chip info', or 'what hardware'.",
-        ));
-        tool_descs.push((
-            "hardware_memory_read",
-            "Read actual memory/register values from Nucleo via USB. Use when: user asks to 'read register values', 'read memory', 'dump lower memory 0-126', 'give address and value'. Params: address (hex, default 0x20000000), length (bytes, default 128).",
-        ));
-        tool_descs.push((
-            "hardware_capabilities",
-            "Query connected hardware for reported GPIO pins and LED pin. Use when: user asks what pins are available.",
-        ));
     }
+
+    // ── Ensure hardware::boot() tools appear in tool_descs (even without peripherals config) ──
+    {
+        let existing_desc_names: std::collections::HashSet<&str> =
+            tool_descs.iter().map(|(name, _)| *name).collect();
+        for tool in &tools_registry {
+            if hw_added_tool_names.contains(&tool.name().to_string())
+                && !existing_desc_names.contains(tool.name())
+            {
+                // Leak a &'static str from owned description so it lives long enough
+                // for the tool_descs Vec<(&str, &str)> lifetime.
+                let leaked_desc: &'static str = Box::leak(tool.description().to_string().into_boxed_str());
+                let leaked_name: &'static str = Box::leak(tool.name().to_string().into_boxed_str());
+                tool_descs.push((leaked_name, leaked_desc));
+            }
+        }
+    }
+
     let bootstrap_max_chars = if config.agent.compact_context {
         Some(6000)
     } else {
@@ -1393,6 +1399,15 @@ pub async fn run(
         Some(&config.identity),
         bootstrap_max_chars,
     );
+
+    // Inject hardware device summary if available
+    if !hw_device_summary.is_empty()
+        && hw_device_summary != "No hardware devices connected."
+    {
+        system_prompt.push_str("\n## Connected Hardware Devices\n\n");
+        system_prompt.push_str(&hw_device_summary);
+        system_prompt.push('\n');
+    }
 
     // Append structured tool-use instructions with schemas
     system_prompt.push_str(&build_tool_instructions(&tools_registry));
@@ -1677,7 +1692,9 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
     tools_registry.extend(peripheral_tools);
 
     // ── Hardware registry tools (Phase 4 ToolRegistry + plugins) ──
-    let hw_boot = crate::hardware::boot().await?;
+    let hw_boot = crate::hardware::boot(&config.peripherals).await?;
+    let hw_device_summary = hw_boot.device_summary.clone();
+    let mut hw_added_tool_names: Vec<String> = Vec::new();
     if !hw_boot.tools.is_empty() {
         let existing: std::collections::HashSet<String> =
             tools_registry.iter().map(|t| t.name().to_string()).collect();
@@ -1687,6 +1704,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
             .filter(|t| !existing.contains(t.name()))
             .collect();
         if !new_hw_tools.is_empty() {
+            hw_added_tool_names = new_hw_tools.iter().map(|t| t.name().to_string()).collect();
             tracing::info!(count = new_hw_tools.len(), "Hardware registry tools added (process_message)");
             tools_registry.extend(new_hw_tools);
         }
@@ -1739,32 +1757,32 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         tool_descs.push(("composio", "Execute actions on 1000+ apps via Composio."));
     }
     if config.peripherals.enabled && !config.peripherals.boards.is_empty() {
-        tool_descs.push(("gpio_read", "Read GPIO pin value on connected hardware."));
+        tool_descs.push(("gpio_read", "Read the current state of a GPIO pin (returns 0 or 1)."));
         tool_descs.push((
             "gpio_write",
-            "Set GPIO pin high or low on connected hardware.",
+            "Set a GPIO pin HIGH (1) or LOW (0). Use this to turn on/off LEDs and control output pins.",
         ));
         tool_descs.push((
             "arduino_upload",
             "Upload Arduino sketch. Use for 'make a heart', custom patterns. You write full .ino code; ZeroClaw uploads it.",
         ));
-        tool_descs.push((
-            "hardware_memory_map",
-            "Return flash and RAM address ranges. Use when user asks for memory addresses or memory map.",
-        ));
-        tool_descs.push((
-            "hardware_board_info",
-            "Return full board info (chip, architecture, memory map). Use when user asks for board info, what board, connected hardware, or chip info.",
-        ));
-        tool_descs.push((
-            "hardware_memory_read",
-            "Read actual memory/register values from Nucleo. Use when user asks to read registers, read memory, dump lower memory 0-126, or give address and value.",
-        ));
-        tool_descs.push((
-            "hardware_capabilities",
-            "Query connected hardware for reported GPIO pins and LED pin. Use when user asks what pins are available.",
-        ));
     }
+
+    // ── Ensure hardware::boot() tools appear in tool_descs ──
+    {
+        let existing_desc_names: std::collections::HashSet<&str> =
+            tool_descs.iter().map(|(name, _)| *name).collect();
+        for tool in &tools_registry {
+            if hw_added_tool_names.contains(&tool.name().to_string())
+                && !existing_desc_names.contains(tool.name())
+            {
+                let leaked_desc: &'static str = Box::leak(tool.description().to_string().into_boxed_str());
+                let leaked_name: &'static str = Box::leak(tool.name().to_string().into_boxed_str());
+                tool_descs.push((leaked_name, leaked_desc));
+            }
+        }
+    }
+
     let bootstrap_max_chars = if config.agent.compact_context {
         Some(6000)
     } else {
@@ -1778,6 +1796,16 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         Some(&config.identity),
         bootstrap_max_chars,
     );
+
+    // Inject hardware device summary if available
+    if !hw_device_summary.is_empty()
+        && hw_device_summary != "No hardware devices connected."
+    {
+        system_prompt.push_str("\n## Connected Hardware Devices\n\n");
+        system_prompt.push_str(&hw_device_summary);
+        system_prompt.push('\n');
+    }
+
     system_prompt.push_str(&build_tool_instructions(&tools_registry));
 
     let mem_context = build_context(mem.as_ref(), message, config.memory.min_relevance_score).await;

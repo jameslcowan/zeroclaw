@@ -9,7 +9,6 @@ use crate::config::PeripheralBoardConfig;
 use crate::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
@@ -30,18 +29,20 @@ fn is_path_allowed(path: &str) -> bool {
     ALLOWED_PATH_PREFIXES.iter().any(|p| path.starts_with(p))
 }
 
-/// JSON request/response over serial.
-async fn send_request(port: &mut SerialStream, cmd: &str, args: Value) -> anyhow::Result<Value> {
-    static ID: AtomicU64 = AtomicU64::new(0);
-    let id = ID.fetch_add(1, Ordering::Relaxed);
-    let id_str = id.to_string();
-
-    let req = json!({
-        "id": id_str,
-        "cmd": cmd,
-        "args": args
-    });
+/// JSON request/response over serial — ZeroClaw wire protocol.
+///
+/// Wire format (must match firmware):
+///   Host → Device:  `{"cmd":"gpio_write","params":{"pin":25,"value":1}}\n`
+///   Device → Host:  `{"ok":true,"data":{"pin":25,"value":1,"state":"HIGH"}}\n`
+async fn send_request(port: &mut SerialStream, cmd: &str, params: Value) -> anyhow::Result<Value> {
+    let req = json!({ "cmd": cmd, "params": params });
     let line = format!("{}\n", req);
+
+    tracing::info!(
+        cmd = %cmd,
+        bytes = %line.trim(),
+        "serial write"
+    );
 
     port.write_all(line.as_bytes()).await?;
     port.flush().await?;
@@ -55,11 +56,8 @@ async fn send_request(port: &mut SerialStream, cmd: &str, args: Value) -> anyhow
         buf.push(b[0]);
     }
     let line_str = String::from_utf8_lossy(&buf);
+    tracing::info!(response = %line_str.trim(), "serial read");
     let resp: Value = serde_json::from_str(line_str.trim())?;
-    let resp_id = resp["id"].as_str().unwrap_or("");
-    if resp_id != id_str {
-        anyhow::bail!("Response id mismatch: expected {}, got {}", id_str, resp_id);
-    }
     Ok(resp)
 }
 
@@ -84,15 +82,17 @@ impl SerialTransport {
         })??;
 
         let ok = resp["ok"].as_bool().unwrap_or(false);
-        let result = resp["result"]
-            .as_str()
-            .map(String::from)
-            .unwrap_or_else(|| resp["result"].to_string());
+        // Firmware responds with "data" object; stringify it for the tool output.
+        let output = if resp["data"].is_null() || resp["data"].is_object() {
+            resp["data"].to_string()
+        } else {
+            resp["data"].as_str().map(String::from).unwrap_or_else(|| resp["data"].to_string())
+        };
         let error = resp["error"].as_str().map(String::from);
 
         Ok(ToolResult {
             success: ok,
-            output: result,
+            output,
             error,
         })
     }

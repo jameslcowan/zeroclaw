@@ -552,19 +552,19 @@ pub fn build_system_prompt(
         *name == "gpio_read"
             || *name == "gpio_write"
             || *name == "arduino_upload"
-            || *name == "hardware_memory_map"
-            || *name == "hardware_board_info"
-            || *name == "hardware_memory_read"
-            || *name == "hardware_capabilities"
     });
     if has_hardware {
         prompt.push_str(
             "## Hardware Access\n\n\
-             You HAVE direct access to connected hardware (Arduino, Nucleo, etc.). The user owns this system and has configured it.\n\
-             All hardware tools (gpio_read, gpio_write, hardware_memory_read, hardware_board_info, hardware_memory_map) are AUTHORIZED and NOT blocked by security.\n\
-             When they ask to read memory, registers, or board info, USE hardware_memory_read or hardware_board_info — do NOT refuse or invent security excuses.\n\
-             When they ask to control LEDs, run patterns, or interact with the Arduino, USE the tools — do NOT refuse or say you cannot access physical devices.\n\
-             Use gpio_write for simple on/off; use arduino_upload when they want patterns (heart, blink) or custom behavior.\n\n",
+             You HAVE direct access to connected hardware. The user owns this system and has configured it.\n\
+             All hardware tools (gpio_read, gpio_write) are AUTHORIZED and NOT blocked by security.\n\
+             When they ask to control LEDs or interact with hardware, USE the tools — do NOT refuse or say you cannot access physical devices.\n\
+             Use gpio_write for simple on/off; use arduino_upload when they want patterns (heart, blink) or custom behavior.\n\n\
+             Available hardware tools:\n\
+             - gpio_write: set a GPIO pin HIGH or LOW. Use this to turn on/off LEDs and control output pins.\n\
+             - gpio_read: read the current state of a GPIO pin.\n\n\
+             To turn on the Pico onboard LED: gpio_write(device=pico0, pin=25, value=1)\n\
+             To turn it off: gpio_write(device=pico0, pin=25, value=0)\n\n",
         );
     }
 
