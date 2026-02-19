@@ -219,7 +219,7 @@ impl Agent {
         self.history.clear();
     }
 
-    pub fn from_config(config: &Config) -> Result<Self> {
+    pub async fn from_config(config: &Config) -> Result<Self> {
         let observer: Arc<dyn Observer> =
             Arc::from(observability::create_observer(&config.observability));
         let runtime: Arc<dyn runtime::RuntimeAdapter> =
@@ -247,7 +247,7 @@ impl Agent {
             None
         };
 
-        let tools = tools::all_tools_with_runtime(
+        let mut tools = tools::all_tools_with_runtime(
             Arc::new(config.clone()),
             &security,
             runtime,
@@ -261,6 +261,30 @@ impl Agent {
             config.api_key.as_deref(),
             config,
         );
+
+        // ── Peripheral tools (config-driven boards) ──────────────────
+        let peripheral_tools =
+            crate::peripherals::create_peripheral_tools(&config.peripherals).await?;
+        if !peripheral_tools.is_empty() {
+            tracing::info!(count = peripheral_tools.len(), "Peripheral tools added (Agent)");
+            tools.extend(peripheral_tools);
+        }
+
+        // ── Hardware registry tools (Phase 4 ToolRegistry + plugins) ──
+        let hw_boot = crate::hardware::boot().await?;
+        if !hw_boot.tools.is_empty() {
+            let existing: std::collections::HashSet<String> =
+                tools.iter().map(|t| t.name().to_string()).collect();
+            let new_hw_tools: Vec<Box<dyn Tool>> = hw_boot
+                .tools
+                .into_iter()
+                .filter(|t| !existing.contains(t.name()))
+                .collect();
+            if !new_hw_tools.is_empty() {
+                tracing::info!(count = new_hw_tools.len(), "Hardware registry tools added (Agent)");
+                tools.extend(new_hw_tools);
+            }
+        }
 
         let provider_name = config.default_provider.as_deref().unwrap_or("openrouter");
 
@@ -572,7 +596,7 @@ pub async fn run(
     }
     effective_config.default_temperature = temperature;
 
-    let mut agent = Agent::from_config(&effective_config)?;
+    let mut agent = Agent::from_config(&effective_config).await?;
 
     let provider_name = effective_config
         .default_provider

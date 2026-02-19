@@ -18,9 +18,16 @@ pub mod serial;
 
 pub mod gpio;
 
+// ── Phase 4: ToolRegistry + plugin system ─────────────────────────────────────
+pub mod loader;
+pub mod manifest;
+pub mod subprocess;
+pub mod tool_registry;
+
 pub use device::{Device, DeviceCapabilities, DeviceContext, DeviceKind, DeviceRegistry};
 pub use gpio::{gpio_tools, GpioReadTool, GpioWriteTool};
 pub use protocol::{ZcCommand, ZcResponse};
+pub use tool_registry::{ToolError, ToolRegistry};
 pub use transport::{Transport, TransportError, TransportKind};
 
 #[cfg(feature = "hardware")]
@@ -31,6 +38,68 @@ use anyhow::Result;
 
 // Re-export config types so wizard can use `hardware::HardwareConfig` etc.
 pub use crate::config::{HardwareConfig, HardwareTransport};
+
+// ── Phase 5: boot() — hardware tool integration into agent loop ───────────────
+
+/// Result of [`boot`]: tools to merge into the agent + device summary for the
+/// system prompt.
+pub struct HardwareBootResult {
+    /// Tools to extend into the agent's `tools_registry`.
+    pub tools: Vec<Box<dyn crate::tools::Tool>>,
+    /// Human-readable device summary for the LLM system prompt.
+    pub device_summary: String,
+}
+
+/// Boot the hardware subsystem: discover devices + load tool registry.
+///
+/// With the `hardware` feature: enumerates USB-serial devices, registers them
+/// in a [`DeviceRegistry`], and loads GPIO + plugin tools.
+///
+/// Without the feature: loads plugin tools from `~/.zeroclaw/tools/` only,
+/// with an empty device registry (GPIO tools will report "no device found"
+/// if called, which is correct).
+///
+/// Plugin loading errors are logged as warnings and never abort boot.
+#[cfg(feature = "hardware")]
+pub async fn boot() -> anyhow::Result<HardwareBootResult> {
+    let devices = std::sync::Arc::new(
+        tokio::sync::RwLock::new(DeviceRegistry::discover().await),
+    );
+    let registry = ToolRegistry::load(devices.clone()).await?;
+    let device_summary = {
+        let reg = devices.read().await;
+        reg.prompt_summary()
+    };
+    let tools = registry.into_tools();
+    if !tools.is_empty() {
+        tracing::info!(count = tools.len(), "Hardware registry tools loaded");
+    }
+    Ok(HardwareBootResult {
+        tools,
+        device_summary,
+    })
+}
+
+/// Fallback when the `hardware` feature is disabled — plugins only.
+#[cfg(not(feature = "hardware"))]
+pub async fn boot() -> anyhow::Result<HardwareBootResult> {
+    let devices = std::sync::Arc::new(
+        tokio::sync::RwLock::new(DeviceRegistry::new()),
+    );
+    let registry = ToolRegistry::load(devices.clone()).await?;
+    let device_summary = {
+        let reg = devices.read().await;
+        reg.prompt_summary()
+    };
+    let tools = registry.into_tools();
+    if !tools.is_empty() {
+        tracing::info!(count = tools.len(), "Hardware registry tools loaded (plugins only)");
+    }
+    Ok(HardwareBootResult {
+        tools,
+        device_summary,
+    })
+}
 
 /// A hardware device discovered during auto-scan.
 #[derive(Debug, Clone)]

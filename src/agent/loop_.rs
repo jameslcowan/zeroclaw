@@ -1212,6 +1212,23 @@ pub async fn run(
         tools_registry.extend(peripheral_tools);
     }
 
+    // ── Hardware registry tools (Phase 4 ToolRegistry + plugins) ──
+    let hw_boot = crate::hardware::boot().await?;
+    if !hw_boot.tools.is_empty() {
+        // Deduplicate: peripheral tools take precedence for names like gpio_read/gpio_write.
+        let existing: std::collections::HashSet<String> =
+            tools_registry.iter().map(|t| t.name().to_string()).collect();
+        let new_hw_tools: Vec<Box<dyn Tool>> = hw_boot
+            .tools
+            .into_iter()
+            .filter(|t| !existing.contains(t.name()))
+            .collect();
+        if !new_hw_tools.is_empty() {
+            tracing::info!(count = new_hw_tools.len(), "Hardware registry tools added");
+            tools_registry.extend(new_hw_tools);
+        }
+    }
+
     // ── Resolve provider ─────────────────────────────────────────
     let provider_name = provider_override
         .as_deref()
@@ -1658,6 +1675,22 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
     let peripheral_tools: Vec<Box<dyn Tool>> =
         crate::peripherals::create_peripheral_tools(&config.peripherals).await?;
     tools_registry.extend(peripheral_tools);
+
+    // ── Hardware registry tools (Phase 4 ToolRegistry + plugins) ──
+    let hw_boot = crate::hardware::boot().await?;
+    if !hw_boot.tools.is_empty() {
+        let existing: std::collections::HashSet<String> =
+            tools_registry.iter().map(|t| t.name().to_string()).collect();
+        let new_hw_tools: Vec<Box<dyn Tool>> = hw_boot
+            .tools
+            .into_iter()
+            .filter(|t| !existing.contains(t.name()))
+            .collect();
+        if !new_hw_tools.is_empty() {
+            tracing::info!(count = new_hw_tools.len(), "Hardware registry tools added (process_message)");
+            tools_registry.extend(new_hw_tools);
+        }
+    }
 
     let provider_name = config.default_provider.as_deref().unwrap_or("openrouter");
     let model_name = config
