@@ -20,6 +20,7 @@ pub mod discord;
 pub mod email_channel;
 pub mod imessage;
 pub mod irc;
+#[cfg(feature = "channel-lark")]
 pub mod lark;
 pub mod linq;
 #[cfg(feature = "channel-matrix")]
@@ -43,6 +44,7 @@ pub use discord::DiscordChannel;
 pub use email_channel::EmailChannel;
 pub use imessage::IMessageChannel;
 pub use irc::IrcChannel;
+#[cfg(feature = "channel-lark")]
 pub use lark::LarkChannel;
 pub use linq::LinqChannel;
 #[cfg(feature = "channel-matrix")]
@@ -701,13 +703,14 @@ async fn get_or_create_provider(
         None
     };
 
-    let provider = providers::create_resilient_provider_with_options(
+    let provider = create_resilient_provider_nonblocking(
         provider_name,
-        defaults.api_key.as_deref(),
-        api_url,
-        &defaults.reliability,
-        &ctx.provider_runtime_options,
-    )?;
+        ctx.api_key.clone(),
+        api_url.map(ToString::to_string),
+        ctx.reliability.as_ref().clone(),
+        ctx.provider_runtime_options.clone(),
+    )
+    .await?;
     let provider: Arc<dyn Provider> = Arc::from(provider);
 
     if let Err(err) = provider.warmup().await {
@@ -719,6 +722,27 @@ async fn get_or_create_provider(
         .entry(provider_name.to_string())
         .or_insert_with(|| Arc::clone(&provider));
     Ok(Arc::clone(cached))
+}
+
+async fn create_resilient_provider_nonblocking(
+    provider_name: &str,
+    api_key: Option<String>,
+    api_url: Option<String>,
+    reliability: crate::config::ReliabilityConfig,
+    provider_runtime_options: providers::ProviderRuntimeOptions,
+) -> anyhow::Result<Box<dyn Provider>> {
+    let provider_name = provider_name.to_string();
+    tokio::task::spawn_blocking(move || {
+        providers::create_resilient_provider_with_options(
+            &provider_name,
+            api_key.as_deref(),
+            api_url.as_deref(),
+            &reliability,
+            &provider_runtime_options,
+        )
+    })
+    .await
+    .context("failed to join provider initialization task")?
 }
 
 fn build_models_help_response(current: &ChannelRouteSelection, workspace_dir: &Path) -> String {
@@ -2185,7 +2209,10 @@ pub async fn handle_command(command: crate::ChannelCommands, config: &Config) ->
                 ),
                 ("Email", config.channels_config.email.is_some()),
                 ("IRC", config.channels_config.irc.is_some()),
-                ("Lark", config.channels_config.lark.is_some()),
+                (
+                    "Lark",
+                    cfg!(feature = "channel-lark") && config.channels_config.lark.is_some(),
+                ),
                 ("DingTalk", config.channels_config.dingtalk.is_some()),
                 ("QQ", config.channels_config.qq.is_some()),
             ] {
@@ -2194,6 +2221,11 @@ pub async fn handle_command(command: crate::ChannelCommands, config: &Config) ->
             if !cfg!(feature = "channel-matrix") {
                 println!(
                     "  ℹ️ Matrix channel support is disabled in this build (enable `channel-matrix`)."
+                );
+            }
+            if !cfg!(feature = "channel-lark") {
+                println!(
+                    "  ℹ️ Lark channel support is disabled in this build (enable `channel-lark`)."
                 );
             }
             println!("\nTo start channels: zeroclaw channel start");
@@ -2415,8 +2447,16 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
         ));
     }
 
+    #[cfg(feature = "channel-lark")]
     if let Some(ref lk) = config.channels_config.lark {
         channels.push(("Lark", Arc::new(LarkChannel::from_config(lk))));
+    }
+
+    #[cfg(not(feature = "channel-lark"))]
+    if config.channels_config.lark.is_some() {
+        tracing::warn!(
+            "Lark channel is configured but this build was compiled without `channel-lark`; skipping Lark health check."
+        );
     }
 
     if let Some(ref dt) = config.channels_config.dingtalk {
@@ -2492,13 +2532,16 @@ pub async fn start_channels(config: Config) -> Result<()> {
         secrets_encrypt: config.secrets.encrypt,
         reasoning_enabled: config.runtime.reasoning_enabled,
     };
-    let provider: Arc<dyn Provider> = Arc::from(providers::create_resilient_provider_with_options(
-        &provider_name,
-        config.api_key.as_deref(),
-        config.api_url.as_deref(),
-        &config.reliability,
-        &provider_runtime_options,
-    )?);
+    let provider: Arc<dyn Provider> = Arc::from(
+        create_resilient_provider_nonblocking(
+            &provider_name,
+            config.api_key.clone(),
+            config.api_url.clone(),
+            config.reliability.clone(),
+            provider_runtime_options.clone(),
+        )
+        .await?,
+    );
 
     // Warm up the provider connection pool (TLS handshake, DNS, HTTP/2 setup)
     // so the first real message doesn't hit a cold-start timeout.
@@ -2806,8 +2849,16 @@ pub async fn start_channels(config: Config) -> Result<()> {
         })));
     }
 
+    #[cfg(feature = "channel-lark")]
     if let Some(ref lk) = config.channels_config.lark {
         channels.push(Arc::new(LarkChannel::from_config(lk)));
+    }
+
+    #[cfg(not(feature = "channel-lark"))]
+    if config.channels_config.lark.is_some() {
+        tracing::warn!(
+            "Lark channel is configured but this build was compiled without `channel-lark`; skipping Lark runtime startup."
+        );
     }
 
     if let Some(ref dt) = config.channels_config.dingtalk {

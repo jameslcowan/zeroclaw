@@ -138,6 +138,10 @@ enum Commands {
         #[arg(long)]
         interactive: bool,
 
+        /// Overwrite existing config without confirmation
+        #[arg(long)]
+        force: bool,
+
         /// Reconfigure channels only (fast repair flow)
         #[arg(long)]
         channels_only: bool,
@@ -370,6 +374,25 @@ Examples:
     Peripheral {
         #[command(subcommand)]
         peripheral_command: zeroclaw::PeripheralCommands,
+    },
+
+    /// Manage agent memory (list, get, stats, clear)
+    #[command(long_about = "\
+Manage agent memory entries.
+
+List, inspect, and clear memory entries stored by the agent. \
+Supports filtering by category and session, pagination, and \
+batch clearing with confirmation.
+
+Examples:
+  zeroclaw memory stats
+  zeroclaw memory list
+  zeroclaw memory list --category core --limit 10
+  zeroclaw memory get <key>
+  zeroclaw memory clear --category conversation --yes")]
+    Memory {
+        #[command(subcommand)]
+        memory_command: MemoryCommands,
     },
 
     /// Manage configuration
@@ -636,15 +659,45 @@ enum ChannelCommands {
 enum SkillCommands {
     /// List installed skills
     List,
-    /// Install a skill from a git URL (HTTPS/SSH) or local path
+    /// Install a skill from a GitHub URL or local path
     Install {
-        /// Git URL (HTTPS/SSH) or local path
+        /// GitHub URL or local path
         source: String,
     },
     /// Remove an installed skill
     Remove {
         /// Skill name
         name: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum MemoryCommands {
+    /// List memory entries with optional filters
+    List {
+        #[arg(long)]
+        category: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, default_value = "50")]
+        limit: usize,
+        #[arg(long, default_value = "0")]
+        offset: usize,
+    },
+    /// Get a specific memory entry by key
+    Get { key: String },
+    /// Show memory backend statistics and health
+    Stats,
+    /// Clear memories by category, by key, or clear all
+    Clear {
+        /// Delete a single entry by key (supports prefix match)
+        #[arg(long)]
+        key: Option<String>,
+        #[arg(long)]
+        category: Option<String>,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -699,6 +752,7 @@ async fn main() -> Result<()> {
     // not allowed", we run the wizard on a blocking thread via spawn_blocking.
     if let Commands::Onboard {
         interactive,
+        force,
         channels_only,
         api_key,
         provider,
@@ -707,6 +761,7 @@ async fn main() -> Result<()> {
     } = &cli.command
     {
         let interactive = *interactive;
+        let force = *force;
         let channels_only = *channels_only;
         let api_key = api_key.clone();
         let provider = provider.clone();
@@ -721,16 +776,20 @@ async fn main() -> Result<()> {
         {
             bail!("--channels-only does not accept --api-key, --provider, --model, or --memory");
         }
+        if channels_only && force {
+            bail!("--channels-only does not accept --force");
+        }
         let config = if channels_only {
             onboard::run_channels_repair_wizard().await
         } else if interactive {
-            onboard::run_wizard().await
+            onboard::run_wizard(force).await
         } else {
             onboard::run_quick_setup(
                 api_key.as_deref(),
                 provider.as_deref(),
                 model.as_deref(),
                 memory.as_deref(),
+                force,
             )
             .await
         }?;
@@ -949,6 +1008,10 @@ async fn main() -> Result<()> {
 
         Commands::Migrate { migrate_command } => {
             migration::handle_command(migrate_command, &config).await
+        }
+
+        Commands::Memory { memory_command } => {
+            memory::cli::handle_command(memory_command, &config).await
         }
 
         Commands::Auth { auth_command } => handle_auth_command(auth_command, &config).await,
@@ -1177,7 +1240,9 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                         let account_id =
                             extract_openai_account_id_for_profile(&token_set.access_token);
 
-                        auth_service.store_openai_tokens(&profile, token_set, account_id, true)?;
+                        auth_service
+                            .store_openai_tokens(&profile, token_set, account_id, true)
+                            .await?;
                         clear_pending_openai_login(config);
 
                         println!("Saved profile {profile}");
@@ -1227,7 +1292,9 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                 auth::openai_oauth::exchange_code_for_tokens(&client, &code, &pkce).await?;
             let account_id = extract_openai_account_id_for_profile(&token_set.access_token);
 
-            auth_service.store_openai_tokens(&profile, token_set, account_id, true)?;
+            auth_service
+                .store_openai_tokens(&profile, token_set, account_id, true)
+                .await?;
             clear_pending_openai_login(config);
 
             println!("Saved profile {profile}");
@@ -1280,7 +1347,9 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                 auth::openai_oauth::exchange_code_for_tokens(&client, &code, &pkce).await?;
             let account_id = extract_openai_account_id_for_profile(&token_set.access_token);
 
-            auth_service.store_openai_tokens(&profile, token_set, account_id, true)?;
+            auth_service
+                .store_openai_tokens(&profile, token_set, account_id, true)
+                .await?;
             clear_pending_openai_login(config);
 
             println!("Saved profile {profile}");
@@ -1310,7 +1379,9 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                 kind.as_metadata_value().to_string(),
             );
 
-            auth_service.store_provider_token(&provider, &profile, &token, metadata, true)?;
+            auth_service
+                .store_provider_token(&provider, &profile, &token, metadata, true)
+                .await?;
             println!("Saved profile {profile}");
             println!("Active profile for {provider}: {profile}");
             Ok(())
@@ -1330,7 +1401,9 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                 kind.as_metadata_value().to_string(),
             );
 
-            auth_service.store_provider_token(&provider, &profile, &token, metadata, true)?;
+            auth_service
+                .store_provider_token(&provider, &profile, &token, metadata, true)
+                .await?;
             println!("Saved profile {profile}");
             println!("Active profile for {provider}: {profile}");
             Ok(())
@@ -1360,7 +1433,7 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
 
         AuthCommands::Logout { provider, profile } => {
             let provider = auth::normalize_provider(&provider)?;
-            let removed = auth_service.remove_profile(&provider, &profile)?;
+            let removed = auth_service.remove_profile(&provider, &profile).await?;
             if removed {
                 println!("Removed auth profile {provider}:{profile}");
             } else {
@@ -1371,13 +1444,13 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
 
         AuthCommands::Use { provider, profile } => {
             let provider = auth::normalize_provider(&provider)?;
-            auth_service.set_active_profile(&provider, &profile)?;
+            auth_service.set_active_profile(&provider, &profile).await?;
             println!("Active profile for {provider}: {profile}");
             Ok(())
         }
 
         AuthCommands::List => {
-            let data = auth_service.load_profiles()?;
+            let data = auth_service.load_profiles().await?;
             if data.profiles.is_empty() {
                 println!("No auth profiles configured.");
                 return Ok(());
@@ -1396,7 +1469,7 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
         }
 
         AuthCommands::Status => {
-            let data = auth_service.load_profiles()?;
+            let data = auth_service.load_profiles().await?;
             if data.profiles.is_empty() {
                 println!("No auth profiles configured.");
                 return Ok(());
@@ -1474,6 +1547,7 @@ mod tests {
         match cli.command {
             Commands::Onboard {
                 interactive,
+                force,
                 channels_only,
                 api_key,
                 provider,
@@ -1481,6 +1555,7 @@ mod tests {
                 ..
             } => {
                 assert!(!interactive);
+                assert!(!force);
                 assert!(!channels_only);
                 assert_eq!(provider.as_deref(), Some("openrouter"));
                 assert_eq!(model.as_deref(), Some("custom-model-946"));
@@ -1512,5 +1587,16 @@ mod tests {
             script.contains("zeroclaw"),
             "completion script should reference binary name"
         );
+    }
+
+    #[test]
+    fn onboard_cli_accepts_force_flag() {
+        let cli = Cli::try_parse_from(["zeroclaw", "onboard", "--force"])
+            .expect("onboard --force should parse");
+
+        match cli.command {
+            Commands::Onboard { force, .. } => assert!(force),
+            other => panic!("expected onboard command, got {other:?}"),
+        }
     }
 }

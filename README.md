@@ -85,7 +85,7 @@ Local machine quick benchmark (macOS arm64, Feb 2026) normalized for 0.8GHz edge
 | **Language** | TypeScript | Python | Go | **Rust** |
 | **RAM** | > 1GB | > 100MB | < 10MB | **< 5MB** |
 | **Startup (0.8GHz core)** | > 500s | > 30s | < 1s | **< 10ms** |
-| **Binary Size** | ~28MB (dist) | N/A (Scripts) | ~8MB | **3.4 MB** |
+| **Binary Size** | ~28MB (dist) | N/A (Scripts) | ~8MB | **~8.8 MB** |
 | **Cost** | Mac Mini $599 | Linux SBC ~$50 | Linux Board $10 | **Any hardware $10** |
 
 > Notes: ZeroClaw results are measured on release builds using `/usr/bin/time -l`. OpenClaw requires Node.js runtime (typically ~390MB additional memory overhead), while NanoBot requires Python runtime. PicoClaw and ZeroClaw are static binaries. The RAM figures above are runtime memory; build-time compilation requirements are higher.
@@ -231,8 +231,14 @@ cd zeroclaw
 # Optional: run onboarding in the same flow
 ./bootstrap.sh --onboard --api-key "sk-..." --provider openrouter [--model "openrouter/auto"]
 
-# Optional: run bootstrap + onboarding fully in Docker
+# Optional: run bootstrap + onboarding fully in Docker-compatible mode
 ./bootstrap.sh --docker
+
+# Optional: force Podman as container CLI
+ZEROCLAW_CONTAINER_CLI=podman ./bootstrap.sh --docker
+
+# Optional: in --docker mode, skip local image build and use local tag or pull fallback image
+./bootstrap.sh --docker --skip-build
 ```
 
 Remote one-liner (review first in security-sensitive environments):
@@ -276,6 +282,9 @@ zeroclaw onboard --api-key sk-... --provider openrouter [--model "openrouter/aut
 
 # Or interactive wizard
 zeroclaw onboard --interactive
+
+# If config.toml already exists and you intentionally want to overwrite it
+zeroclaw onboard --force
 
 # Or quickly repair channels/allowlists only
 zeroclaw onboard --channels-only
