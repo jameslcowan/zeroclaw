@@ -426,6 +426,13 @@ Examples:
         #[arg(value_enum)]
         shell: CompletionShell,
     },
+
+    /// Manage JavaScript/TypeScript plugins
+    #[cfg(feature = "js")]
+    Plugin {
+        #[command(subcommand)]
+        plugin_command: zeroclaw::js::cli::PluginCommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1034,6 +1041,9 @@ async fn main() -> Result<()> {
                 Ok(())
             }
         },
+
+        #[cfg(feature = "js")]
+        Commands::Plugin { plugin_command } => plugin_command.run().await,
     }
 }
 
