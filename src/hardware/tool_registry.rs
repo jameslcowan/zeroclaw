@@ -85,6 +85,16 @@ impl ToolRegistry {
             tools.insert(name, tool);
         }
 
+        // Phase 7: dynamic code tools (device_read_code, device_write_code, device_exec)
+        #[cfg(feature = "hardware")]
+        {
+            for tool in super::pico_code::device_code_tools(devices.clone()) {
+                let name = tool.name().to_string();
+                println!("[registry] loaded built-in: {}", name);
+                tools.insert(name, tool);
+            }
+        }
+
         // ── 2. User plugins ───────────────────────────────────────────────
         let plugins = scan_plugin_dir();
         for plugin in plugins {

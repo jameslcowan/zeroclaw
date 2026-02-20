@@ -8,6 +8,50 @@ use super::transport::Transport;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+// ── DeviceRuntime ─────────────────────────────────────────────────────────────
+
+/// The software runtime / execution environment of a device.
+///
+/// Determines which host-side tooling is used for code deployment and execution.
+/// Currently only [`MicroPython`](DeviceRuntime::MicroPython) is implemented;
+/// other variants return a clear "not yet supported" error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceRuntime {
+    /// MicroPython — uses `mpremote` for code read/write/exec.
+    MicroPython,
+    /// CircuitPython — `mpremote`-compatible (future).
+    CircuitPython,
+    /// Arduino — `arduino-cli` for sketch upload (future).
+    Arduino,
+    /// STM32 / probe-rs based flashing and debugging (future).
+    Nucleus,
+    /// Linux / Raspberry Pi — ssh/shell execution (future).
+    Linux,
+}
+
+impl DeviceRuntime {
+    /// Derive the default runtime from a [`DeviceKind`].
+    pub fn from_kind(kind: &DeviceKind) -> Self {
+        match kind {
+            DeviceKind::Pico | DeviceKind::Esp32 | DeviceKind::Generic => Self::MicroPython,
+            DeviceKind::Arduino => Self::Arduino,
+            DeviceKind::Nucleo => Self::Nucleus,
+        }
+    }
+}
+
+impl std::fmt::Display for DeviceRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MicroPython => write!(f, "MicroPython"),
+            Self::CircuitPython => write!(f, "CircuitPython"),
+            Self::Arduino => write!(f, "Arduino"),
+            Self::Nucleus => write!(f, "Nucleus"),
+            Self::Linux => write!(f, "Linux"),
+        }
+    }
+}
+
 // ── DeviceKind ────────────────────────────────────────────────────────────────
 
 /// The category of a discovered hardware device.
@@ -78,6 +122,8 @@ pub struct Device {
     pub board_name: String,
     /// Device category derived from VID or ping handshake.
     pub kind: DeviceKind,
+    /// Software runtime that determines how code is deployed/executed.
+    pub runtime: DeviceRuntime,
     /// USB Vendor ID (if USB-connected).
     pub vid: Option<u16>,
     /// USB Product ID (if USB-connected).
@@ -157,11 +203,13 @@ impl DeviceRegistry {
         let kind = vid
             .and_then(DeviceKind::from_vid)
             .unwrap_or(DeviceKind::Generic);
+        let runtime = DeviceRuntime::from_kind(&kind);
 
         let device = Arc::new(Device {
             alias: alias.clone(),
             board_name: board_name.to_string(),
             kind,
+            runtime,
             vid,
             pid,
             device_path,

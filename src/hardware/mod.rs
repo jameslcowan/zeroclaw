@@ -22,6 +22,9 @@ pub mod uf2;
 #[cfg(feature = "hardware")]
 pub mod pico_flash;
 
+#[cfg(feature = "hardware")]
+pub mod pico_code;
+
 pub mod gpio;
 
 // ── Phase 4: ToolRegistry + plugin system ─────────────────────────────────────
@@ -30,8 +33,10 @@ pub mod manifest;
 pub mod subprocess;
 pub mod tool_registry;
 
-pub use device::{Device, DeviceCapabilities, DeviceContext, DeviceKind, DeviceRegistry};
+pub use device::{Device, DeviceCapabilities, DeviceContext, DeviceKind, DeviceRegistry, DeviceRuntime};
 pub use gpio::{gpio_tools, GpioReadTool, GpioWriteTool};
+#[cfg(feature = "hardware")]
+pub use pico_code::{device_code_tools, DeviceExecTool, DeviceReadCodeTool, DeviceWriteCodeTool};
 pub use protocol::{ZcCommand, ZcResponse};
 pub use tool_registry::{ToolError, ToolRegistry};
 pub use transport::{Transport, TransportError, TransportKind};

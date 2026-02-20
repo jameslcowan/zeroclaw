@@ -568,6 +568,39 @@ pub fn build_system_prompt(
         );
     }
 
+    // ── 1b-2. Dynamic hardware programming (when device code tools present)
+    let has_device_code = tools.iter().any(|(name, _)| {
+        *name == "device_read_code"
+            || *name == "device_write_code"
+            || *name == "device_exec"
+    });
+    if has_device_code {
+        prompt.push_str(
+            "## Dynamic Hardware Programming\n\n\
+             You can write and deploy code to connected devices (Pico, ESP32, micro:bit, etc.).\n\n\
+             Workflow for new hardware requests:\n\
+             1. Call device_read_code to understand the current state\n\
+             2. Write complete code for the user's hardware\n\
+             3. Call device_write_code to deploy it\n\
+             4. Call device_exec to test or run one-off actions\n\n\
+             For simple one-time actions (move servo once, blink LED):\n\
+             → Use device_exec with a short snippet — no need to modify main.py\n\n\
+             For persistent behavior (servo always responds to commands):\n\
+             → Use device_write_code to update main.py with the new capability\n\
+             → Keep the ZeroClaw serial JSON protocol handler intact in main.py\n\
+             → Add new commands alongside existing gpio_write/gpio_read handlers\n\n\
+             The ZeroClaw serial protocol must always be preserved in main.py:\n\
+             → The while True: loop reading JSON from stdin must remain\n\
+             → New hardware capabilities are added as new cmd handlers inside it\n\
+             → Never remove ping, gpio_write, gpio_read handlers\n\n\
+             MicroPython hardware libraries available:\n\
+             → machine.Pin, machine.PWM, machine.I2C, machine.SPI, machine.UART\n\
+             → machine.ADC for analog reads\n\
+             → time.sleep, time.sleep_ms for timing\n\
+             → gc for memory info\n\n",
+        );
+    }
+
     // ── 1c. Action instruction (avoid meta-summary) ───────────────
     prompt.push_str(
         "## Your Task\n\n\
@@ -1164,7 +1197,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
     };
     // Build system prompt from workspace identity files + skills
     let workspace = config.workspace_dir.clone();
-    let tools_registry = Arc::new(tools::all_tools_with_runtime(
+    let mut tools_vec = tools::all_tools_with_runtime(
         Arc::new(config.clone()),
         &security,
         runtime,
@@ -1177,7 +1210,36 @@ pub async fn start_channels(config: Config) -> Result<()> {
         &config.agents,
         config.api_key.as_deref(),
         &config,
-    ));
+    );
+
+    // ── Peripheral tools (config-driven boards) ──────────────────
+    let peripheral_tools =
+        crate::peripherals::create_peripheral_tools(&config.peripherals).await?;
+    if !peripheral_tools.is_empty() {
+        tracing::info!(count = peripheral_tools.len(), "Peripheral tools added (channels)");
+        tools_vec.extend(peripheral_tools);
+    }
+
+    // ── Hardware registry tools (Phase 4 ToolRegistry + plugins) ──
+    let hw_boot = crate::hardware::boot(&config.peripherals).await?;
+    let hw_device_summary = hw_boot.device_summary.clone();
+    let mut hw_added_tool_names: Vec<String> = Vec::new();
+    if !hw_boot.tools.is_empty() {
+        let existing: std::collections::HashSet<String> =
+            tools_vec.iter().map(|t| t.name().to_string()).collect();
+        let new_hw_tools: Vec<Box<dyn crate::tools::Tool>> = hw_boot
+            .tools
+            .into_iter()
+            .filter(|t| !existing.contains(t.name()))
+            .collect();
+        if !new_hw_tools.is_empty() {
+            hw_added_tool_names = new_hw_tools.iter().map(|t| t.name().to_string()).collect();
+            tracing::info!(count = new_hw_tools.len(), "Hardware registry tools added (channels)");
+            tools_vec.extend(new_hw_tools);
+        }
+    }
+
+    let tools_registry = Arc::new(tools_vec);
 
     let skills = crate::skills::load_skills(&workspace);
 
@@ -1235,6 +1297,35 @@ pub async fn start_channels(config: Config) -> Result<()> {
             "Delegate a subtask to a specialized agent. Use when: a task benefits from a different model (e.g. fast summarization, deep reasoning, code generation). The sub-agent runs a single prompt and returns its response.",
         ));
     }
+    if config.peripherals.enabled && !config.peripherals.boards.is_empty() {
+        tool_descs.push((
+            "gpio_read",
+            "Read the current state of a GPIO pin (returns 0 or 1). Use when: checking sensor/button state, LED status.",
+        ));
+        tool_descs.push((
+            "gpio_write",
+            "Set a GPIO pin HIGH (1) or LOW (0). Use this to turn on/off LEDs and control output pins. Example: gpio_write(device=pico0, pin=25, value=1) turns on the Pico onboard LED.",
+        ));
+        tool_descs.push((
+            "arduino_upload",
+            "Upload agent-generated Arduino sketch. Use when: user asks for 'make a heart', 'blink pattern', or custom LED behavior on Arduino. You write the full .ino code; ZeroClaw compiles and uploads it. Pin 13 = built-in LED on Uno.",
+        ));
+    }
+
+    // ── Ensure hardware::boot() tools appear in tool_descs ──
+    {
+        let existing_desc_names: std::collections::HashSet<&str> =
+            tool_descs.iter().map(|(name, _)| *name).collect();
+        for tool in tools_registry.iter() {
+            if hw_added_tool_names.contains(&tool.name().to_string())
+                && !existing_desc_names.contains(tool.name())
+            {
+                let leaked_desc: &'static str = Box::leak(tool.description().to_string().into_boxed_str());
+                let leaked_name: &'static str = Box::leak(tool.name().to_string().into_boxed_str());
+                tool_descs.push((leaked_name, leaked_desc));
+            }
+        }
+    }
 
     let bootstrap_max_chars = if config.agent.compact_context {
         Some(6000)
@@ -1249,6 +1340,16 @@ pub async fn start_channels(config: Config) -> Result<()> {
         Some(&config.identity),
         bootstrap_max_chars,
     );
+
+    // Inject hardware device summary if available
+    if !hw_device_summary.is_empty()
+        && hw_device_summary != "No hardware devices connected."
+    {
+        system_prompt.push_str("\n## Connected Hardware Devices\n\n");
+        system_prompt.push_str(&hw_device_summary);
+        system_prompt.push('\n');
+    }
+
     system_prompt.push_str(&build_tool_instructions(tools_registry.as_ref()));
 
     if !skills.is_empty() {
