@@ -2,10 +2,7 @@ name: PR Label Policy Check
 
 on:
     pull_request:
-        paths:
-            - ".github/label-policy.json"
-            - ".github/workflows/pr-labeler.yml"
-            - ".github/workflows/pr-auto-response.yml"
+        branches: [main]
     push:
         paths:
             - ".github/label-policy.json"
@@ -20,7 +17,35 @@ permissions:
     contents: read
 
 jobs:
+    changes:
+        name: Detect Changes
+        runs-on: blacksmith-2vcpu-ubuntu-2404
+        outputs:
+            should_run: ${{ steps.scope.outputs.should_run }}
+        steps:
+            - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+              if: github.event_name == 'pull_request'
+              with:
+                  fetch-depth: 0
+
+            - id: scope
+              shell: bash
+              run: |
+                  if [ "${{ github.event_name }}" != "pull_request" ]; then
+                    echo "should_run=true" >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
+                  base="${{ github.event.pull_request.base.sha }}"
+                  changed=$(git diff --name-only "$base"...HEAD -- '.github/label-policy.json' '.github/workflows/pr-labeler.yml' '.github/workflows/pr-auto-response.yml' || true)
+                  if [ -n "$changed" ]; then
+                    echo "should_run=true" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "should_run=false" >> "$GITHUB_OUTPUT"
+                  fi
+
     contributor-tier-consistency:
+        needs: [changes]
+        if: needs.changes.outputs.should_run == 'true'
         runs-on: blacksmith-2vcpu-ubuntu-2404
         timeout-minutes: 10
         steps:
@@ -72,3 +97,23 @@ jobs:
 
                   print('label policy file is valid and workflow consumers are wired to shared policy')
                   PY
+
+    label-policy-gate:
+        name: PR Label Policy Gate
+        if: always()
+        needs: [changes, contributor-tier-consistency]
+        runs-on: blacksmith-2vcpu-ubuntu-2404
+        steps:
+            - name: Evaluate gate
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [ "${{ needs.changes.outputs.should_run }}" != "true" ]; then
+                    echo "No label policy changes. Gate passed."
+                    exit 0
+                  fi
+                  if [ "${{ needs.contributor-tier-consistency.result }}" != "success" ]; then
+                    echo "Label policy check did not pass."
+                    exit 1
+                  fi
+                  echo "Label policy gate passed."

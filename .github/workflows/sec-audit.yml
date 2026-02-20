@@ -11,12 +11,6 @@ on:
             - "deny.toml"
     pull_request:
         branches: [main]
-        paths:
-            - "Cargo.toml"
-            - "Cargo.lock"
-            - "src/**"
-            - "crates/**"
-            - "deny.toml"
     schedule:
         - cron: "0 6 * * 1" # Weekly on Monday 6am UTC
 
@@ -34,8 +28,36 @@ env:
     CARGO_TERM_COLOR: always
 
 jobs:
+    changes:
+        name: Detect Changes
+        runs-on: blacksmith-2vcpu-ubuntu-2404
+        outputs:
+            should_run: ${{ steps.scope.outputs.should_run }}
+        steps:
+            - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+              if: github.event_name == 'pull_request'
+              with:
+                  fetch-depth: 0
+
+            - id: scope
+              shell: bash
+              run: |
+                  if [ "${{ github.event_name }}" != "pull_request" ]; then
+                    echo "should_run=true" >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
+                  base="${{ github.event.pull_request.base.sha }}"
+                  changed=$(git diff --name-only "$base"...HEAD -- Cargo.toml Cargo.lock 'src/**' 'crates/**' deny.toml || true)
+                  if [ -n "$changed" ]; then
+                    echo "should_run=true" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "should_run=false" >> "$GITHUB_OUTPUT"
+                  fi
+
     audit:
         name: Security Audit
+        needs: [changes]
+        if: needs.changes.outputs.should_run == 'true'
         runs-on: blacksmith-2vcpu-ubuntu-2404
         timeout-minutes: 20
         steps:
@@ -47,6 +69,8 @@ jobs:
 
     deny:
         name: License & Supply Chain
+        needs: [changes]
+        if: needs.changes.outputs.should_run == 'true'
         runs-on: blacksmith-2vcpu-ubuntu-2404
         timeout-minutes: 20
         steps:
@@ -55,3 +79,23 @@ jobs:
             - uses: EmbarkStudios/cargo-deny-action@3fd3802e88374d3fe9159b834c7714ec57d6c979 # v2
               with:
                   command: check advisories licenses sources
+
+    sec-gate:
+        name: Sec Audit Gate
+        if: always()
+        needs: [changes, audit, deny]
+        runs-on: blacksmith-2vcpu-ubuntu-2404
+        steps:
+            - name: Evaluate gate
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [ "${{ needs.changes.outputs.should_run }}" != "true" ]; then
+                    echo "No security-relevant changes. Gate passed."
+                    exit 0
+                  fi
+                  if [ "${{ needs.audit.result }}" != "success" ] || [ "${{ needs.deny.result }}" != "success" ]; then
+                    echo "Required security jobs did not pass."
+                    exit 1
+                  fi
+                  echo "Security gate passed."

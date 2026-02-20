@@ -2,10 +2,7 @@ name: Workflow Sanity
 
 on:
     pull_request:
-        paths:
-            - ".github/workflows/**"
-            - ".github/*.yml"
-            - ".github/*.yaml"
+        branches: [main]
     push:
         paths:
             - ".github/workflows/**"
@@ -20,7 +17,35 @@ permissions:
     contents: read
 
 jobs:
+    changes:
+        name: Detect Changes
+        runs-on: blacksmith-2vcpu-ubuntu-2404
+        outputs:
+            should_run: ${{ steps.scope.outputs.should_run }}
+        steps:
+            - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+              if: github.event_name == 'pull_request'
+              with:
+                  fetch-depth: 0
+
+            - id: scope
+              shell: bash
+              run: |
+                  if [ "${{ github.event_name }}" != "pull_request" ]; then
+                    echo "should_run=true" >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
+                  base="${{ github.event.pull_request.base.sha }}"
+                  changed=$(git diff --name-only "$base"...HEAD -- '.github/workflows/**' '.github/*.yml' '.github/*.yaml' || true)
+                  if [ -n "$changed" ]; then
+                    echo "should_run=true" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "should_run=false" >> "$GITHUB_OUTPUT"
+                  fi
+
     no-tabs:
+        needs: [changes]
+        if: needs.changes.outputs.should_run == 'true'
         runs-on: blacksmith-2vcpu-ubuntu-2404
         timeout-minutes: 10
         steps:
@@ -54,6 +79,8 @@ jobs:
                   PY
 
     actionlint:
+        needs: [changes]
+        if: needs.changes.outputs.should_run == 'true'
         runs-on: blacksmith-2vcpu-ubuntu-2404
         timeout-minutes: 10
         steps:
@@ -62,3 +89,23 @@ jobs:
 
             - name: Lint GitHub workflows
               uses: rhysd/actionlint@393031adb9afb225ee52ae2ccd7a5af5525e03e8 # v1.7.11
+
+    workflow-sanity-gate:
+        name: Workflow Sanity Gate
+        if: always()
+        needs: [changes, no-tabs, actionlint]
+        runs-on: blacksmith-2vcpu-ubuntu-2404
+        steps:
+            - name: Evaluate gate
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [ "${{ needs.changes.outputs.should_run }}" != "true" ]; then
+                    echo "No workflow file changes. Gate passed."
+                    exit 0
+                  fi
+                  if [ "${{ needs.no-tabs.result }}" != "success" ] || [ "${{ needs.actionlint.result }}" != "success" ]; then
+                    echo "Required workflow sanity jobs did not pass."
+                    exit 1
+                  fi
+                  echo "Workflow sanity gate passed."

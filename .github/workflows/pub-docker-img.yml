@@ -18,13 +18,6 @@ on:
             - ".github/workflows/pub-docker-img.yml"
     pull_request:
         branches: [main]
-        paths:
-            - "Dockerfile"
-            - ".dockerignore"
-            - "docker-compose.yml"
-            - "rust-toolchain.toml"
-            - "dev/config.template.toml"
-            - ".github/workflows/pub-docker-img.yml"
     workflow_dispatch:
 
 concurrency:
@@ -36,9 +29,40 @@ env:
     IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+    changes:
+        name: Detect Changes
+        runs-on: blacksmith-2vcpu-ubuntu-2404
+        outputs:
+            should_run: ${{ steps.scope.outputs.should_run }}
+        steps:
+            - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+              if: github.event_name == 'pull_request'
+              with:
+                  fetch-depth: 0
+
+            - id: scope
+              shell: bash
+              run: |
+                  if [ "${{ github.event_name }}" != "pull_request" ]; then
+                    echo "should_run=true" >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
+                  base="${{ github.event.pull_request.base.sha }}"
+                  changed=$(git diff --name-only "$base"...HEAD -- Dockerfile .dockerignore docker-compose.yml rust-toolchain.toml 'dev/config.template.toml' '.github/workflows/pub-docker-img.yml' || true)
+                  if [ -n "$changed" ]; then
+                    echo "should_run=true" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "should_run=false" >> "$GITHUB_OUTPUT"
+                  fi
+
     pr-smoke:
         name: PR Docker Smoke
-        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+        needs: [changes]
+        if: |
+            github.event_name == 'workflow_dispatch' ||
+            (github.event_name == 'pull_request' &&
+             github.event.pull_request.head.repo.full_name == github.repository &&
+             needs.changes.outputs.should_run == 'true')
         runs-on: blacksmith-2vcpu-ubuntu-2404
         timeout-minutes: 25
         permissions:
@@ -189,3 +213,32 @@ jobs:
                   fi
 
                   echo "Anonymous GHCR pull access verified."
+
+    docker-gate:
+        name: Docker Gate
+        if: always()
+        needs: [changes, pr-smoke]
+        runs-on: blacksmith-2vcpu-ubuntu-2404
+        steps:
+            - name: Evaluate gate
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [ "${{ github.event_name }}" != "pull_request" ]; then
+                    echo "Not a PR event. Gate passed."
+                    exit 0
+                  fi
+                  if [ "${{ needs.changes.outputs.should_run }}" != "true" ]; then
+                    echo "No Docker-relevant changes. Gate passed."
+                    exit 0
+                  fi
+                  # Fork PRs cannot run Docker smoke (no secrets access)
+                  if [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+                    echo "Fork PR. Docker smoke skipped by design. Gate passed."
+                    exit 0
+                  fi
+                  if [ "${{ needs.pr-smoke.result }}" != "success" ]; then
+                    echo "Docker smoke test did not pass."
+                    exit 1
+                  fi
+                  echo "Docker gate passed."
