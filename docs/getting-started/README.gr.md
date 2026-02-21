@@ -1,16 +1,16 @@
-# Οδηγός για το Ξεκίνημα (Getting Started)
+# Πρώτα Βήματα (Getting Started)
 
-Για την πρώτη σας εγκατάσταση και για μια γρήγορη γνωριμία με το σύστημα.
+Οδηγίες για την πρώτη σας εγκατάσταση και για μια γρήγορη γνωριμία με το σύστημα.
 
 ## Πώς να Ξεκινήσετε
 
 1. **Γενική παρουσίαση και γρήγορη εκκίνηση:** [../../README.md](../../README.md)
-2. **Εγκατάσταση με ένα κλικ και διπλή λειτουργία:** [../one-click-bootstrap.md](../one-click-bootstrap.md)
-3. **Βρείτε εντολές ανάλογα με την εργασία που θέλετε να κάνετε:** [../commands-reference.md](../commands-reference.md)
+2. **Εγκατάσταση με ένα κλικ και διπλή λειτουργία (dual bootstrap mode):** [../one-click-bootstrap.md](../one-click-bootstrap.md)
+3. **Εύρεση εντολών ανά εργασία:** [../commands-reference.md](../commands-reference.md)
 
 ---
 
-## Πώς θα προχωρήσετε
+## Πώς vα προχωρήσετε
 
 | Τι θέλετε να κάνετε | Εντολή |
 | :--- | :--- |
@@ -25,12 +25,12 @@
 ## Ρύθμιση και Έλεγχος
 
 * **Γρήγορη ρύθμιση:** `zeroclaw onboard --api-key "sk-..." --provider openrouter`
-* **Ρύθμιση με ερωτήσεις:** `zeroclaw onboard --interactive`
+* **Διαδραστική (interactive) ρύθμιση με ερωτήσεις:** `zeroclaw onboard --interactive`
 * **Προστασία ρυθμίσεων:** Αν ξανατρέξετε τη διαδικασία, το σύστημα θα σας ζητήσει επιβεβαίωση (εκτός αν χρησιμοποιήσετε την εντολή `--force`).
 * **Μοντέλα Ollama cloud (`:cloud`):** Χρειάζονται μια διεύθυνση `api_url` και ένα κλειδί API (π.χ. `api_url = "https://ollama.com"`).
 * **Έλεγχος καλής λειτουργίας:** Χρησιμοποιήστε τις εντολές `zeroclaw status` και `zeroclaw doctor` για να βεβαιωθείτε ότι όλα δουλεύουν σωστά.
 
 ## Επόμενα Βήματα
 
-- Runtime operations: [../operations/README.md](../operations/README.md)
-- Reference catalogs: [../reference/README.md](../reference/README.md)
+- Λειτουργίες Runtime: [../operations/README.md](../operations/README.md)
+- Κατάλογοι αναφοράς: [../reference/README.md](../reference/README.md)
