@@ -63,7 +63,9 @@ pub use whatsapp::WhatsAppChannel;
 #[cfg(feature = "whatsapp-web")]
 pub use whatsapp_web::WhatsAppWebChannel;
 
-use crate::agent::loop_::{build_tool_instructions, run_tool_call_loop};
+use crate::agent::loop_::{
+    build_tool_instructions, build_tool_security_runtime, run_tool_call_loop,
+};
 use crate::config::Config;
 use crate::identity;
 use crate::memory::{self, Memory};
@@ -218,6 +220,7 @@ struct ChannelRuntimeContext {
     interrupt_on_new_message: bool,
     multimodal: crate::config::MultimodalConfig,
     hooks: Option<Arc<crate::hooks::HookRunner>>,
+    tool_security: Option<Arc<crate::agent::loop_::ToolSecurityRuntime>>,
     non_cli_excluded_tools: Arc<Vec<String>>,
 }
 
@@ -1658,6 +1661,8 @@ async fn process_channel_message(
                 Some(cancellation_token.clone()),
                 delta_tx,
                 ctx.hooks.as_deref(),
+                ctx.tool_security.as_ref(),
+                false,
                 if msg.channel == "cli" {
                     &[]
                 } else {
@@ -3120,6 +3125,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
         } else {
             None
         },
+        tool_security: build_tool_security_runtime(&config)?,
         non_cli_excluded_tools: Arc::new(config.autonomy.non_cli_excluded_tools.clone()),
     });
 
@@ -3333,6 +3339,7 @@ mod tests {
             workspace_dir: Arc::new(std::env::temp_dir()),
             message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         };
 
@@ -3812,6 +3819,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -3871,6 +3879,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -3944,6 +3953,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -4003,6 +4013,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -4071,6 +4082,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -4160,6 +4172,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -4231,6 +4244,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -4317,6 +4331,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -4388,6 +4403,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -4448,6 +4464,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -4619,6 +4636,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -4699,6 +4717,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: true,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -4791,6 +4810,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: true,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -4865,6 +4885,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -4924,6 +4945,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -5440,6 +5462,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -5525,6 +5548,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -5610,6 +5634,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 
@@ -6157,6 +6182,7 @@ This is an example JSON object for profile settings."#;
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
+            tool_security: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
         });
 

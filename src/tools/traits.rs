@@ -32,6 +32,14 @@ pub trait Tool: Send + Sync {
     /// Execute the tool with given arguments
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult>;
 
+    /// Optional hook to report the target domain used by this tool call.
+    ///
+    /// Security middleware can use this to apply domain-scoped controls (OTP,
+    /// domain estop) after tool-specific URL allowlist validation.
+    fn security_target_domain(&self, _args: &serde_json::Value) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
     /// Get the full spec for LLM registration
     fn spec(&self) -> ToolSpec {
         ToolSpec {

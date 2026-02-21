@@ -996,6 +996,26 @@ impl Tool for BrowserTool {
         })
     }
 
+    fn security_target_domain(&self, args: &Value) -> anyhow::Result<Option<String>> {
+        let action = args
+            .get("action")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("Missing 'action' parameter"))?;
+
+        if action != "open" {
+            return Ok(None);
+        }
+
+        let url = args
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("Missing 'url' for open action"))?;
+
+        self.validate_url(url)?;
+        let host = extract_host(url)?;
+        Ok(Some(host))
+    }
+
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         // Security checks
         if !self.security.can_act() {

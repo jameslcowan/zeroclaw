@@ -76,6 +76,16 @@ impl Tool for BrowserOpenTool {
         })
     }
 
+    fn security_target_domain(&self, args: &serde_json::Value) -> anyhow::Result<Option<String>> {
+        let url = args
+            .get("url")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'url' parameter"))?;
+        let validated = self.validate_url(url)?;
+        let host = extract_host(&validated)?;
+        Ok(Some(host))
+    }
+
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         let url = args
             .get("url")

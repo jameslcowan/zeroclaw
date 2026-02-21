@@ -53,6 +53,12 @@ Last verified: **February 21, 2026**.
 - `zeroclaw agent --provider <ID> --model <MODEL> --temperature <0.0-2.0>`
 - `zeroclaw agent --peripheral <board:path>`
 
+Agent security behavior:
+
+- When `[security.otp].enabled = true` and a gated tool/domain is requested in interactive mode (`zeroclaw agent`), the CLI prompts inline for OTP before executing that tool call.
+- In single-message mode (`zeroclaw agent -m "..."`), OTP-gated tool calls return a structured `otp_required` JSON payload and exit without executing the gated tool.
+- Active estop states are enforced before tool execution (`kill-all`, `network-kill`, `domain-block`, `tool-freeze`) and can block tool calls immediately.
+
 ### `gateway` / `daemon`
 
 - `zeroclaw gateway [--host <HOST>] [--port <PORT>]`

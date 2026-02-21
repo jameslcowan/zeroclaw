@@ -19,6 +19,57 @@ pub struct OtpValidator {
     cached_codes: Mutex<HashMap<String, u64>>,
 }
 
+/// In-memory OTP approval cache keyed by security scope (tool/domain).
+///
+/// Entries are ephemeral and intentionally non-persistent: process restarts
+/// force a fresh OTP challenge for gated operations.
+#[derive(Debug, Default)]
+pub struct OtpApprovalCache {
+    approvals: Mutex<HashMap<String, u64>>,
+}
+
+impl OtpApprovalCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record an approval key with a TTL in seconds.
+    pub fn approve(&self, key: &str, ttl_secs: u64) {
+        self.approve_at(key, ttl_secs, unix_timestamp_now());
+    }
+
+    /// Check whether an approval key is still valid.
+    pub fn is_approved(&self, key: &str) -> bool {
+        self.is_approved_at(key, unix_timestamp_now())
+    }
+
+    /// Clear all cached approvals.
+    pub fn clear(&self) {
+        self.approvals.lock().clear();
+    }
+
+    pub(crate) fn approve_at(&self, key: &str, ttl_secs: u64, now_secs: u64) {
+        let normalized = key.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return;
+        }
+        self.approvals
+            .lock()
+            .insert(normalized, now_secs.saturating_add(ttl_secs.max(1)));
+    }
+
+    pub(crate) fn is_approved_at(&self, key: &str, now_secs: u64) -> bool {
+        let normalized = key.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return false;
+        }
+        let mut lock = self.approvals.lock();
+        lock.retain(|_, expiry| *expiry >= now_secs);
+        lock.get(&normalized)
+            .is_some_and(|expiry| *expiry >= now_secs)
+    }
+}
+
 impl OtpValidator {
     pub fn from_config(
         config: &OtpConfig,
@@ -314,5 +365,27 @@ mod tests {
 
         let ts = 1_700_000_000u64;
         assert_eq!(first.code_for_timestamp(ts), second.code_for_timestamp(ts));
+    }
+
+    #[test]
+    fn approval_cache_respects_ttl_window() {
+        let cache = OtpApprovalCache::new();
+        cache.approve_at("tool:shell", 120, 1_700_000_000);
+
+        assert!(cache.is_approved_at("tool:shell", 1_700_000_050));
+        assert!(!cache.is_approved_at("tool:shell", 1_700_000_121));
+    }
+
+    #[test]
+    fn approval_cache_clear_invalidates_all_entries() {
+        let cache = OtpApprovalCache::new();
+        cache.approve_at("tool:shell", 120, 1000);
+        cache.approve_at("domain:chase.com", 120, 1000);
+        assert!(cache.is_approved_at("tool:shell", 1050));
+        assert!(cache.is_approved_at("domain:chase.com", 1050));
+
+        cache.clear();
+        assert!(!cache.is_approved_at("tool:shell", 1050));
+        assert!(!cache.is_approved_at("domain:chase.com", 1050));
     }
 }

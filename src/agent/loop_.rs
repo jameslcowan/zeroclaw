@@ -7,13 +7,20 @@ use crate::providers::{
     self, ChatMessage, ChatRequest, Provider, ProviderCapabilityError, ToolCall,
 };
 use crate::runtime;
-use crate::security::SecurityPolicy;
+use crate::security::{
+    DomainMatcher, EstopManager, OtpApprovalCache, OtpRequired, OtpRequiredScope, OtpValidator,
+    SecretStore, SecurityPolicy,
+};
 use crate::tools::{self, Tool};
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use regex::{Regex, RegexSet};
+use serde_json::Value;
+use std::collections::HashSet;
 use std::fmt::Write;
 use std::io::Write as _;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -46,6 +53,294 @@ static SENSITIVE_KEY_PATTERNS: LazyLock<RegexSet> = LazyLock::new(|| {
 static SENSITIVE_KV_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(token|api[_-]?key|password|secret|user[_-]?key|bearer|credential)["']?\s*[:=]\s*(?:"([^"]{8,})"|'([^']{8,})'|([a-zA-Z0-9_\-\.]{8,}))"#).unwrap()
 });
+
+#[derive(Clone)]
+pub(crate) struct ToolSecurityRuntime {
+    otp: Option<Arc<OtpRuntime>>,
+    estop: Option<Arc<EstopRuntime>>,
+}
+
+#[derive(Debug)]
+struct OtpRuntime {
+    validator: Arc<OtpValidator>,
+    approval_cache: Arc<OtpApprovalCache>,
+    gated_actions: HashSet<String>,
+    domain_matcher: DomainMatcher,
+    cache_valid_secs: u64,
+}
+
+#[derive(Debug)]
+struct EstopRuntime {
+    config: crate::config::EstopConfig,
+    config_dir: PathBuf,
+    was_engaged: AtomicBool,
+    approval_cache: Option<Arc<OtpApprovalCache>>,
+}
+
+enum OtpGateDecision {
+    Allow,
+    Denied(String),
+    Required(OtpRequired),
+}
+
+struct PendingOtpGate {
+    key: String,
+    scope: OtpRequiredScope,
+    domain: Option<String>,
+}
+
+impl ToolSecurityRuntime {
+    fn resolve_target_domain(
+        &self,
+        tool: &dyn Tool,
+        args: &Value,
+    ) -> std::result::Result<Option<String>, String> {
+        tool.security_target_domain(args)
+            .map_err(|err| format!("Tool argument validation failed: {err}"))
+    }
+
+    fn enforce_estop(
+        &self,
+        tool_name: &str,
+        args: &Value,
+        domain: Option<&str>,
+    ) -> std::result::Result<(), String> {
+        let Some(estop) = &self.estop else {
+            return Ok(());
+        };
+        estop.enforce(tool_name, args, domain)
+    }
+
+    fn enforce_otp(
+        &self,
+        tool_name: &str,
+        args: &Value,
+        domain: Option<&str>,
+        prompt_inline: bool,
+    ) -> OtpGateDecision {
+        let Some(otp) = &self.otp else {
+            return OtpGateDecision::Allow;
+        };
+        otp.enforce(tool_name, args, domain, prompt_inline)
+    }
+}
+
+impl EstopRuntime {
+    fn enforce(
+        &self,
+        tool_name: &str,
+        args: &Value,
+        domain: Option<&str>,
+    ) -> std::result::Result<(), String> {
+        let manager = EstopManager::load(&self.config, &self.config_dir)
+            .map_err(|err| format!("Failed to load estop state: {err}"))?;
+
+        let engaged = manager.status().is_engaged();
+        let previous = self.was_engaged.swap(engaged, Ordering::SeqCst);
+        if engaged && !previous {
+            if let Some(cache) = &self.approval_cache {
+                cache.clear();
+            }
+        }
+
+        manager
+            .check_tool(tool_name, args)
+            .map_err(|err| err.to_string())?;
+        if let Some(domain) = domain {
+            manager
+                .check_domain(domain)
+                .map_err(|err| err.to_string())?;
+        }
+        Ok(())
+    }
+}
+
+impl OtpRuntime {
+    fn enforce(
+        &self,
+        tool_name: &str,
+        args: &Value,
+        domain: Option<&str>,
+        prompt_inline: bool,
+    ) -> OtpGateDecision {
+        let normalized_tool = normalize_gate_key(tool_name);
+        let mut pending = Vec::new();
+
+        if self.gated_actions.contains(&normalized_tool) {
+            let key = format!("tool:{normalized_tool}");
+            if !self.approval_cache.is_approved(&key) {
+                pending.push(PendingOtpGate {
+                    key,
+                    scope: OtpRequiredScope::Tool,
+                    domain: None,
+                });
+            }
+        }
+
+        if let Some(domain) = domain {
+            let normalized_domain = normalize_gate_key(domain);
+            if self.domain_matcher.is_gated(&normalized_domain) {
+                let key = format!("domain:{normalized_domain}");
+                if !self.approval_cache.is_approved(&key) {
+                    pending.push(PendingOtpGate {
+                        key,
+                        scope: OtpRequiredScope::Domain,
+                        domain: Some(normalized_domain),
+                    });
+                }
+            }
+        }
+
+        if pending.is_empty() {
+            return OtpGateDecision::Allow;
+        }
+
+        let summary = summarize_tool_arguments(args);
+        if prompt_inline {
+            match prompt_for_otp_code(tool_name, &summary, domain) {
+                Some(code) => match self.validator.validate(&code) {
+                    Ok(true) => {
+                        for gate in pending {
+                            self.approval_cache
+                                .approve(&gate.key, self.cache_valid_secs);
+                        }
+                        OtpGateDecision::Allow
+                    }
+                    Ok(false) => {
+                        OtpGateDecision::Denied("Invalid OTP code; tool call denied".to_string())
+                    }
+                    Err(err) => OtpGateDecision::Denied(format!(
+                        "OTP validation failed; tool call denied: {err}"
+                    )),
+                },
+                None => {
+                    OtpGateDecision::Denied("OTP code was not provided; tool call denied".into())
+                }
+            }
+        } else {
+            let first = &pending[0];
+            let payload = match first.scope {
+                OtpRequiredScope::Tool => OtpRequired::for_tool(tool_name, &summary),
+                OtpRequiredScope::Domain => OtpRequired::for_domain(
+                    tool_name,
+                    first.domain.clone().unwrap_or_default(),
+                    &summary,
+                ),
+            };
+            OtpGateDecision::Required(payload)
+        }
+    }
+}
+
+fn normalize_gate_key(input: &str) -> String {
+    input.trim().to_ascii_lowercase()
+}
+
+fn summarize_tool_arguments(args: &Value) -> String {
+    match args {
+        Value::Object(map) => {
+            if map.is_empty() {
+                return "{}".to_string();
+            }
+            let mut parts = Vec::new();
+            for (key, value) in map {
+                let rendered = match value {
+                    Value::String(s) => truncate_with_ellipsis(s, 120),
+                    other => truncate_with_ellipsis(&other.to_string(), 120),
+                };
+                parts.push(format!("{key}={rendered}"));
+            }
+            parts.join(", ")
+        }
+        other => truncate_with_ellipsis(&other.to_string(), 180),
+    }
+}
+
+fn prompt_for_otp_code(
+    tool_name: &str,
+    args_summary: &str,
+    domain: Option<&str>,
+) -> Option<String> {
+    let prompt = if let Some(domain) = domain {
+        format!("OTP required for {tool_name} on {domain}: {args_summary} — enter code: ")
+    } else {
+        format!("OTP required for {tool_name}: {args_summary} — enter code: ")
+    };
+
+    eprint!("{prompt}");
+    let _ = std::io::stderr().flush();
+
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return None;
+    }
+    let code = line.trim().to_string();
+    if code.is_empty() {
+        None
+    } else {
+        Some(code)
+    }
+}
+
+pub(crate) fn build_tool_security_runtime(
+    config: &Config,
+) -> Result<Option<Arc<ToolSecurityRuntime>>> {
+    let config_dir = config
+        .config_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Config path must have a parent directory"))?
+        .to_path_buf();
+
+    let mut otp: Option<Arc<OtpRuntime>> = None;
+    let mut shared_cache: Option<Arc<OtpApprovalCache>> = None;
+
+    if config.security.otp.enabled {
+        let store = SecretStore::new(&config_dir, config.secrets.encrypt);
+        let (validator, _enrollment_uri) =
+            OtpValidator::from_config(&config.security.otp, &config_dir, &store)?;
+
+        let domain_matcher = DomainMatcher::new(
+            &config.security.otp.gated_domains,
+            &config.security.otp.gated_domain_categories,
+        )?;
+
+        let cache = Arc::new(OtpApprovalCache::new());
+        let gated_actions = config
+            .security
+            .otp
+            .gated_actions
+            .iter()
+            .map(|action| action.trim().to_ascii_lowercase())
+            .filter(|action| !action.is_empty())
+            .collect::<HashSet<_>>();
+
+        otp = Some(Arc::new(OtpRuntime {
+            validator: Arc::new(validator),
+            approval_cache: Arc::clone(&cache),
+            gated_actions,
+            domain_matcher,
+            cache_valid_secs: config.security.otp.cache_valid_secs,
+        }));
+        shared_cache = Some(cache);
+    }
+
+    let estop = if config.security.estop.enabled {
+        Some(Arc::new(EstopRuntime {
+            config: config.security.estop.clone(),
+            config_dir,
+            was_engaged: AtomicBool::new(false),
+            approval_cache: shared_cache,
+        }))
+    } else {
+        None
+    };
+
+    if otp.is_none() && estop.is_none() {
+        Ok(None)
+    } else {
+        Ok(Some(Arc::new(ToolSecurityRuntime { otp, estop })))
+    }
+}
 
 /// Scrub credentials from tool output to prevent accidental exfiltration.
 /// Replaces known credential patterns with a redacted placeholder while preserving
@@ -1419,6 +1714,8 @@ pub(crate) async fn agent_turn(
         None,
         None,
         None,
+        None,
+        false,
         &[],
     )
     .await
@@ -1594,6 +1891,8 @@ pub(crate) async fn run_tool_call_loop(
     cancellation_token: Option<CancellationToken>,
     on_delta: Option<tokio::sync::mpsc::Sender<String>>,
     hooks: Option<&crate::hooks::HookRunner>,
+    tool_security: Option<&Arc<ToolSecurityRuntime>>,
+    otp_prompt_inline: bool,
     excluded_tools: &[String],
 ) -> Result<String> {
     let max_iterations = if max_tool_iterations == 0 {
@@ -1785,67 +2084,166 @@ pub(crate) async fn run_tool_call_loop(
         // When multiple tool calls are present and interactive CLI approval is not needed, run
         // tool executions concurrently for lower wall-clock latency.
         let mut tool_results = String::new();
-        let mut individual_results: Vec<String> = Vec::new();
-        for call in &tool_calls {
-            // ── Hook: before_tool_call (modifying) ──────────
-            let mut tool_name = call.name.clone();
-            let mut tool_args = call.arguments.clone();
-            if let Some(hooks) = hooks {
-                match hooks.run_before_tool_call(tool_name, tool_args).await {
-                    crate::hooks::HookResult::Cancel(reason) => {
-                        tracing::info!(tool = %call.name, %reason, "tool call cancelled by hook");
-                        let cancelled = format!("Cancelled by hook: {reason}");
-                        individual_results.push(cancelled.clone());
+        let mut individual_results: Vec<String>;
+        let mut otp_required_output: Option<String> = None;
+        let can_execute_in_parallel = should_execute_tools_in_parallel(&tool_calls, approval)
+            && hooks.is_none()
+            && tool_security.is_none();
+
+        if can_execute_in_parallel {
+            individual_results = execute_tools_parallel(
+                &tool_calls,
+                tools_registry,
+                observer,
+                cancellation_token.as_ref(),
+            )
+            .await?;
+
+            for (call, result) in tool_calls.iter().zip(individual_results.iter()) {
+                let _ = writeln!(
+                    tool_results,
+                    "<tool_result name=\"{}\">\n{}\n</tool_result>",
+                    call.name, result
+                );
+            }
+        } else {
+            individual_results = Vec::new();
+            for call in &tool_calls {
+                // ── Hook: before_tool_call (modifying) ──────────
+                let mut tool_name = call.name.clone();
+                let mut tool_args = call.arguments.clone();
+                if let Some(hooks) = hooks {
+                    match hooks.run_before_tool_call(tool_name, tool_args).await {
+                        crate::hooks::HookResult::Cancel(reason) => {
+                            tracing::info!(tool = %call.name, %reason, "tool call cancelled by hook");
+                            let cancelled = format!("Cancelled by hook: {reason}");
+                            individual_results.push(cancelled.clone());
+                            let _ = writeln!(
+                                tool_results,
+                                "<tool_result name=\"{}\">\n{cancelled}\n</tool_result>",
+                                call.name
+                            );
+                            continue;
+                        }
+                        crate::hooks::HookResult::Continue((name, args)) => {
+                            tool_name = name;
+                            tool_args = args;
+                        }
+                    }
+                }
+
+                let Some(tool) = find_tool(tools_registry, &tool_name) else {
+                    let unknown = format!("Unknown tool: {tool_name}");
+                    individual_results.push(unknown.clone());
+                    let _ = writeln!(
+                        tool_results,
+                        "<tool_result name=\"{}\">\n{}\n</tool_result>",
+                        tool_name, unknown
+                    );
+                    continue;
+                };
+
+                let target_domain = if let Some(runtime) = tool_security {
+                    match runtime.resolve_target_domain(tool, &tool_args) {
+                        Ok(domain) => domain,
+                        Err(reason) => {
+                            let blocked = format!("Error: {reason}");
+                            individual_results.push(blocked.clone());
+                            let _ = writeln!(
+                                tool_results,
+                                "<tool_result name=\"{}\">\n{}\n</tool_result>",
+                                tool_name, blocked
+                            );
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(runtime) = tool_security {
+                    if let Err(reason) =
+                        runtime.enforce_estop(&tool_name, &tool_args, target_domain.as_deref())
+                    {
+                        let blocked = format!("Error: {reason}");
+                        individual_results.push(blocked.clone());
                         let _ = writeln!(
                             tool_results,
-                            "<tool_result name=\"{}\">\n{cancelled}\n</tool_result>",
-                            call.name
+                            "<tool_result name=\"{}\">\n{}\n</tool_result>",
+                            tool_name, blocked
                         );
                         continue;
                     }
-                    crate::hooks::HookResult::Continue((name, args)) => {
-                        tool_name = name;
-                        tool_args = args;
+                }
+
+                // ── Approval hook ────────────────────────────────
+                if let Some(mgr) = approval {
+                    if mgr.needs_approval(&tool_name) {
+                        let request = ApprovalRequest {
+                            tool_name: tool_name.clone(),
+                            arguments: tool_args.clone(),
+                        };
+
+                        // Only prompt interactively on CLI; auto-approve on other channels.
+                        let decision = if channel_name == "cli" {
+                            mgr.prompt_cli(&request)
+                        } else {
+                            ApprovalResponse::Yes
+                        };
+
+                        mgr.record_decision(&tool_name, &tool_args, decision, channel_name);
+
+                        if decision == ApprovalResponse::No {
+                            let denied = "Denied by user.".to_string();
+                            individual_results.push(denied.clone());
+                            let _ = writeln!(
+                                tool_results,
+                                "<tool_result name=\"{}\">\n{denied}\n</tool_result>",
+                                tool_name
+                            );
+                            continue;
+                        }
                     }
                 }
-            }
 
-            // ── Approval hook ────────────────────────────────
-            if let Some(mgr) = approval {
-                if mgr.needs_approval(&tool_name) {
-                    let request = ApprovalRequest {
-                        tool_name: tool_name.clone(),
-                        arguments: tool_args.clone(),
-                    };
-
-                    // Only prompt interactively on CLI; auto-approve on other channels.
-                    let decision = if channel_name == "cli" {
-                        mgr.prompt_cli(&request)
-                    } else {
-                        ApprovalResponse::Yes
-                    };
-
-                    mgr.record_decision(&tool_name, &tool_args, decision, channel_name);
-
-                    if decision == ApprovalResponse::No {
-                        let denied = "Denied by user.".to_string();
-                        individual_results.push(denied.clone());
-                        let _ = writeln!(
-                            tool_results,
-                            "<tool_result name=\"{}\">\n{denied}\n</tool_result>",
-                            tool_name
-                        );
-                        continue;
+                if let Some(runtime) = tool_security {
+                    match runtime.enforce_otp(
+                        &tool_name,
+                        &tool_args,
+                        target_domain.as_deref(),
+                        otp_prompt_inline,
+                    ) {
+                        OtpGateDecision::Allow => {}
+                        OtpGateDecision::Denied(reason) => {
+                            let blocked = format!("Error: {reason}");
+                            individual_results.push(blocked.clone());
+                            let _ = writeln!(
+                                tool_results,
+                                "<tool_result name=\"{}\">\n{}\n</tool_result>",
+                                tool_name, blocked
+                            );
+                            continue;
+                        }
+                        OtpGateDecision::Required(payload) => {
+                            let structured = serde_json::to_string_pretty(&payload)
+                                .unwrap_or_else(|_| "{\"type\":\"otp_required\"}".to_string());
+                            individual_results.push(structured.clone());
+                            let _ = writeln!(
+                                tool_results,
+                                "<tool_result name=\"{}\">\n{}\n</tool_result>",
+                                tool_name, structured
+                            );
+                            otp_required_output = Some(structured);
+                            break;
+                        }
                     }
                 }
-            }
 
-            observer.record_event(&ObserverEvent::ToolCallStart {
-                tool: tool_name.clone(),
-            });
-            let start = Instant::now();
-            let (result, tool_success) = if let Some(tool) = find_tool(tools_registry, &tool_name) {
-                match tool.execute(tool_args).await {
+                observer.record_event(&ObserverEvent::ToolCallStart {
+                    tool: tool_name.clone(),
+                });
+                let start = Instant::now();
+                let (result, tool_success) = match tool.execute(tool_args).await {
                     Ok(r) => {
                         let success = r.success;
                         observer.record_event(&ObserverEvent::ToolCall {
@@ -1868,29 +2266,27 @@ pub(crate) async fn run_tool_call_loop(
                         });
                         (format!("Error executing {}: {e}", tool_name), false)
                     }
-                }
-            } else {
-                (format!("Unknown tool: {}", tool_name), false)
-            };
-
-            // ── Hook: after_tool_call (void) ─────────────────
-            if let Some(hooks) = hooks {
-                let tool_result_obj = crate::tools::ToolResult {
-                    success: tool_success,
-                    output: result.clone(),
-                    error: None,
                 };
-                hooks
-                    .fire_after_tool_call(&tool_name, &tool_result_obj, start.elapsed())
-                    .await;
-            }
 
-            individual_results.push(result.clone());
-            let _ = writeln!(
-                tool_results,
-                "<tool_result name=\"{}\">\n{}\n</tool_result>",
-                tool_name, result
-            );
+                // ── Hook: after_tool_call (void) ─────────────────
+                if let Some(hooks) = hooks {
+                    let tool_result_obj = crate::tools::ToolResult {
+                        success: tool_success,
+                        output: result.clone(),
+                        error: None,
+                    };
+                    hooks
+                        .fire_after_tool_call(&tool_name, &tool_result_obj, start.elapsed())
+                        .await;
+                }
+
+                individual_results.push(result.clone());
+                let _ = writeln!(
+                    tool_results,
+                    "<tool_result name=\"{}\">\n{}\n</tool_result>",
+                    tool_name, result
+                );
+            }
         }
 
         // Add assistant message with tool calls + tool results to history.
@@ -1908,6 +2304,10 @@ pub(crate) async fn run_tool_call_loop(
                 });
                 history.push(ChatMessage::tool(tool_msg.to_string()));
             }
+        }
+
+        if let Some(required) = otp_required_output {
+            return Ok(required);
         }
     }
 
@@ -2199,13 +2599,14 @@ pub async fn run(
         system_prompt.push_str(&build_tool_instructions(&tools_registry));
     }
 
+    let tool_security_runtime = build_tool_security_runtime(&config)?;
+
     // ── Approval manager (supervised mode) ───────────────────────
     let approval_manager = if interactive {
         Some(ApprovalManager::from_config(&config.autonomy))
     } else {
         None
     };
-    let channel_name = if interactive { "cli" } else { "daemon" };
 
     // ── Execute ──────────────────────────────────────────────────
     let start = Instant::now();
@@ -2251,12 +2652,14 @@ pub async fn run(
             temperature,
             false,
             approval_manager.as_ref(),
-            channel_name,
+            if interactive { "cli-single" } else { "daemon" },
             &config.multimodal,
             config.agent.max_tool_iterations,
             None,
             None,
             None,
+            tool_security_runtime.as_ref(),
+            false,
             &[],
         )
         .await?;
@@ -2372,12 +2775,14 @@ pub async fn run(
                 temperature,
                 false,
                 approval_manager.as_ref(),
-                channel_name,
+                if interactive { "cli" } else { "daemon" },
                 &config.multimodal,
                 config.agent.max_tool_iterations,
                 None,
                 None,
                 None,
+                tool_security_runtime.as_ref(),
+                true,
                 &[],
             )
             .await
@@ -2592,7 +2997,9 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         ChatMessage::user(&enriched),
     ];
 
-    agent_turn(
+    let tool_security_runtime = build_tool_security_runtime(&config)?;
+
+    run_tool_call_loop(
         provider.as_ref(),
         &mut history,
         &tools_registry,
@@ -2601,8 +3008,16 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         &model_name,
         config.default_temperature,
         true,
+        None,
+        "channel",
         &config.multimodal,
         config.agent.max_tool_iterations,
+        None,
+        None,
+        None,
+        tool_security_runtime.as_ref(),
+        false,
+        &[],
     )
     .await
 }
@@ -2823,6 +3238,67 @@ mod tests {
         }
     }
 
+    struct CountingTool {
+        name: String,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl CountingTool {
+        fn new(name: &str, calls: Arc<AtomicUsize>) -> Self {
+            Self {
+                name: name.to_string(),
+                calls,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Tool for CountingTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn description(&self) -> &str {
+            "Counting tool for security gate tests"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "value": { "type": "string" }
+                }
+            })
+        }
+
+        async fn execute(
+            &self,
+            _args: serde_json::Value,
+        ) -> anyhow::Result<crate::tools::ToolResult> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(crate::tools::ToolResult {
+                success: true,
+                output: "ok".to_string(),
+                error: None,
+            })
+        }
+    }
+
+    fn security_config_with_runtime(temp: &tempfile::TempDir) -> Config {
+        let mut config = Config::default();
+        config.config_path = temp.path().join("config.toml");
+        config.workspace_dir = temp.path().join("workspace");
+        config.secrets.encrypt = true;
+        config.security.otp.enabled = true;
+        config.security.otp.gated_actions = vec!["count_tool".into()];
+        config.security.otp.gated_domains = vec!["*.chase.com".into()];
+        config.security.otp.gated_domain_categories = Vec::new();
+        config.security.estop.enabled = true;
+        config.security.estop.state_file =
+            temp.path().join("estop-state.json").display().to_string();
+        config
+    }
+
     #[tokio::test]
     async fn run_tool_call_loop_returns_structured_error_for_non_vision_provider() {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -2852,6 +3328,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            false,
             &[],
         )
         .await
@@ -2898,6 +3376,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            false,
             &[],
         )
         .await
@@ -2938,6 +3418,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            false,
             &[],
         )
         .await
@@ -2945,6 +3427,94 @@ mod tests {
 
         assert_eq!(result, "vision-ok");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_returns_otp_required_without_executing_tool_in_non_interactive_mode(
+    ) {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"count_tool","arguments":{"value":"A"}}
+</tool_call>"#,
+        ]);
+        let observer = NoopObserver;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(CountingTool::new(
+            "count_tool",
+            Arc::clone(&calls),
+        ))];
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("run count tool"),
+        ];
+
+        let temp = tempfile::tempdir().unwrap();
+        let config = security_config_with_runtime(&temp);
+        let runtime = build_tool_security_runtime(&config)
+            .unwrap()
+            .expect("security runtime should be enabled");
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli-single",
+            &crate::config::MultimodalConfig::default(),
+            4,
+            None,
+            None,
+            None,
+            Some(&runtime),
+            false,
+            &[],
+        )
+        .await
+        .expect("OTP gate should return structured response");
+
+        assert!(result.contains("\"type\": \"otp_required\""));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn estop_engagement_clears_otp_approval_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = security_config_with_runtime(&temp);
+        let runtime = build_tool_security_runtime(&config)
+            .unwrap()
+            .expect("security runtime should be enabled");
+
+        let cache = runtime
+            .otp
+            .as_ref()
+            .expect("otp runtime")
+            .approval_cache
+            .clone();
+        cache.approve("tool:count_tool", 300);
+        assert!(cache.is_approved("tool:count_tool"));
+
+        let mut manager = EstopManager::load(&config.security.estop, temp.path()).unwrap();
+        manager
+            .engage(crate::security::EstopLevel::KillAll)
+            .unwrap();
+
+        let err = runtime
+            .enforce_estop(
+                "file_read",
+                &serde_json::json!({"path": "Cargo.toml"}),
+                None,
+            )
+            .expect_err("kill-all should block tool");
+        assert!(err.contains("kill-all"));
+        assert!(
+            !cache.is_approved("tool:count_tool"),
+            "estop engagement must clear cached approvals"
+        );
     }
 
     #[test]
@@ -3060,6 +3630,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            false,
             &[],
         )
         .await

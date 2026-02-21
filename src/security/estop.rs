@@ -3,6 +3,7 @@ use crate::security::domain_matcher::DomainMatcher;
 use crate::security::otp::OtpValidator;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -192,6 +193,49 @@ impl EstopManager {
         self.persist_state()
     }
 
+    /// Enforce estop state against a tool call.
+    pub fn check_tool(&self, tool_name: &str, args: &Value) -> Result<()> {
+        if self.state.kill_all {
+            anyhow::bail!("Emergency stop active: kill-all blocks all tools");
+        }
+
+        let normalized_tool = normalize_tool_name(tool_name)?;
+        if self
+            .state
+            .frozen_tools
+            .iter()
+            .any(|frozen| frozen == &normalized_tool)
+        {
+            anyhow::bail!("Emergency stop active: tool-freeze blocks tool '{normalized_tool}'");
+        }
+
+        if self.state.network_kill && is_network_tool_call(&normalized_tool, args) {
+            anyhow::bail!(
+                "Emergency stop active: network-kill blocks network tool '{normalized_tool}'"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Enforce domain-block estop state for browser navigations.
+    pub fn check_domain(&self, domain: &str) -> Result<()> {
+        if self.state.kill_all {
+            anyhow::bail!("Emergency stop active: kill-all blocks all tools");
+        }
+
+        if self.state.blocked_domains.is_empty() {
+            return Ok(());
+        }
+
+        let matcher = DomainMatcher::new(&self.state.blocked_domains, &[] as &[String])?;
+        if matcher.is_gated(domain) {
+            anyhow::bail!("Emergency stop active: domain-block blocks browser domain '{domain}'");
+        }
+
+        Ok(())
+    }
+
     fn ensure_resume_is_authorized(
         &self,
         otp_code: Option<&str>,
@@ -295,6 +339,42 @@ fn now_rfc3339() -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp(secs as i64, 0)
         .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH)
         .to_rfc3339()
+}
+
+fn is_network_tool_call(tool_name: &str, args: &Value) -> bool {
+    match tool_name {
+        "browser" | "browser_open" | "http_request" | "web_search" | "composio" | "pushover" => {
+            true
+        }
+        "shell" => args
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(shell_command_uses_network),
+        _ => false,
+    }
+}
+
+fn shell_command_uses_network(command: &str) -> bool {
+    let normalized = command.to_ascii_lowercase();
+    [
+        "http://",
+        "https://",
+        "curl ",
+        "wget ",
+        "ssh ",
+        "scp ",
+        "sftp ",
+        "ping ",
+        "nc ",
+        "ncat ",
+        "netcat ",
+        "telnet ",
+        "ftp ",
+        "dig ",
+        "nslookup ",
+    ]
+    .iter()
+    .any(|token| normalized.contains(token))
 }
 
 #[cfg(test)]
@@ -418,5 +498,54 @@ mod tests {
             .resume(ResumeSelector::KillAll, Some(&code), Some(&validator))
             .unwrap();
         assert!(!manager.status().kill_all);
+    }
+
+    #[test]
+    fn check_tool_enforces_freeze_network_and_kill_all() {
+        let dir = tempdir().unwrap();
+        let state_path = dir.path().join("estop-state.json");
+        let cfg = estop_config(&state_path);
+        let mut manager = EstopManager::load(&cfg, dir.path()).unwrap();
+
+        manager
+            .engage(EstopLevel::ToolFreeze(vec!["shell".into()]))
+            .unwrap();
+        let err = manager
+            .check_tool("shell", &serde_json::json!({"command": "pwd"}))
+            .unwrap_err();
+        assert!(err.to_string().contains("tool-freeze"));
+
+        manager
+            .resume(ResumeSelector::Tools(vec!["shell".into()]), None, None)
+            .unwrap();
+        manager.engage(EstopLevel::NetworkKill).unwrap();
+        let err = manager
+            .check_tool(
+                "shell",
+                &serde_json::json!({"command": "curl https://example.com"}),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("network-kill"));
+
+        manager.engage(EstopLevel::KillAll).unwrap();
+        let err = manager
+            .check_tool("file_read", &serde_json::json!({"path": "Cargo.toml"}))
+            .unwrap_err();
+        assert!(err.to_string().contains("kill-all"));
+    }
+
+    #[test]
+    fn check_domain_blocks_matching_domain_patterns() {
+        let dir = tempdir().unwrap();
+        let state_path = dir.path().join("estop-state.json");
+        let cfg = estop_config(&state_path);
+        let mut manager = EstopManager::load(&cfg, dir.path()).unwrap();
+        manager
+            .engage(EstopLevel::DomainBlock(vec!["*.chase.com".into()]))
+            .unwrap();
+
+        let err = manager.check_domain("secure.chase.com").unwrap_err();
+        assert!(err.to_string().contains("domain-block"));
+        assert!(manager.check_domain("example.com").is_ok());
     }
 }

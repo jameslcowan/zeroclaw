@@ -96,6 +96,9 @@ Notes:
 - Category presets expand to curated domain sets during validation.
 - Invalid domain globs or unknown categories fail fast at startup.
 - When `enabled = true` and no OTP secret exists, ZeroClaw generates one and prints an enrollment URI once.
+- OTP approvals are cached in-memory by scope (`tool:<name>` / `domain:<host>`) for `cache_valid_secs` and are not persisted across process restarts.
+- For browser tools, `browser.allowed_domains` is validated before OTP domain gating; disallowed domains are blocked before OTP challenge.
+- When estop transitions from disengaged to engaged, runtime OTP approvals are cleared immediately.
 
 Example:
 
@@ -123,6 +126,9 @@ Notes:
 - Estop state is persisted atomically and reloaded on startup.
 - Corrupted/unreadable estop state falls back to fail-closed `kill_all`.
 - Use CLI command `zeroclaw estop` to engage and `zeroclaw estop resume` to clear levels.
+- During tool execution, estop checks run before approval prompts and OTP checks.
+- `network-kill` blocks known network tools and `shell` commands that match network-oriented patterns (for example `curl`, `wget`, `ssh`, `scp`, `ftp`, `ping`).
+- `domain-block` is enforced on browser target domains after URL validation/allowlist checks.
 
 ## `[agents.<name>]`
 

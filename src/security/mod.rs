@@ -35,6 +35,8 @@ pub mod policy;
 pub mod secrets;
 pub mod traits;
 
+use serde::{Deserialize, Serialize};
+
 #[allow(unused_imports)]
 pub use audit::{AuditEvent, AuditEventType, AuditLogger};
 #[allow(unused_imports)]
@@ -43,7 +45,7 @@ pub use domain_matcher::DomainMatcher;
 #[allow(unused_imports)]
 pub use estop::{EstopLevel, EstopManager, EstopState, ResumeSelector};
 #[allow(unused_imports)]
-pub use otp::OtpValidator;
+pub use otp::{OtpApprovalCache, OtpValidator};
 #[allow(unused_imports)]
 pub use pairing::PairingGuard;
 pub use policy::{AutonomyLevel, SecurityPolicy};
@@ -51,6 +53,60 @@ pub use policy::{AutonomyLevel, SecurityPolicy};
 pub use secrets::SecretStore;
 #[allow(unused_imports)]
 pub use traits::{NoopSandbox, Sandbox};
+
+/// Scope that triggered an OTP challenge.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OtpRequiredScope {
+    Tool,
+    Domain,
+}
+
+/// Structured response emitted when a tool call requires OTP verification.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OtpRequired {
+    #[serde(rename = "type")]
+    pub response_type: String,
+    pub scope: OtpRequiredScope,
+    pub tool_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    pub parameters_summary: String,
+    pub prompt: String,
+}
+
+impl OtpRequired {
+    pub fn for_tool(tool_name: impl Into<String>, parameters_summary: impl Into<String>) -> Self {
+        let tool_name = tool_name.into();
+        Self {
+            response_type: "otp_required".to_string(),
+            scope: OtpRequiredScope::Tool,
+            prompt: format!("OTP required for {tool_name}. Enter code to continue."),
+            tool_name,
+            domain: None,
+            parameters_summary: parameters_summary.into(),
+        }
+    }
+
+    pub fn for_domain(
+        tool_name: impl Into<String>,
+        domain: impl Into<String>,
+        parameters_summary: impl Into<String>,
+    ) -> Self {
+        let tool_name = tool_name.into();
+        let domain = domain.into();
+        Self {
+            response_type: "otp_required".to_string(),
+            scope: OtpRequiredScope::Domain,
+            prompt: format!(
+                "OTP required for {tool_name} on domain '{domain}'. Enter code to continue."
+            ),
+            tool_name,
+            domain: Some(domain),
+            parameters_summary: parameters_summary.into(),
+        }
+    }
+}
 
 /// Redact sensitive values for safe logging. Shows first 4 chars + "***" suffix.
 /// This function intentionally breaks the data-flow taint chain for static analysis.
@@ -92,5 +148,15 @@ mod tests {
         assert_eq!(redact("ab"), "***");
         assert_eq!(redact(""), "***");
         assert_eq!(redact("12345"), "1234***");
+    }
+
+    #[test]
+    fn otp_required_serialization_is_stable() {
+        let payload = OtpRequired::for_domain("browser_open", "chase.com", "url=https://...");
+        let as_json = serde_json::to_value(payload).unwrap();
+        assert_eq!(as_json["type"], "otp_required");
+        assert_eq!(as_json["scope"], "domain");
+        assert_eq!(as_json["tool_name"], "browser_open");
+        assert_eq!(as_json["domain"], "chase.com");
     }
 }
