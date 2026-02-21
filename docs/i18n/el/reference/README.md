@@ -1,23 +1,30 @@
-# Κατάλογοι αναφοράς (Reference Catalogs)
+# Κατάλογοι Αναφοράς (Reference)
 
-Δομημένο ευρετήριο αναφοράς για εντολές, παρόχους (providers), κανάλια, παραμέτρους (config) και οδηγούς ενσωμάτωσης.
+Δομημένο ευρετήριο τεχνικών αναφορών για εντολές CLI, παρόχους AI (Providers), κανάλια επικοινωνίας και παραμέτρους συστήματος.
 
-## Βασικές αναφορές
+---
 
-- Εντολές ανά ροή εργασίας: [../commands-reference.md](../commands-reference.md)
-- ID παρόχων / ψευδώνυμα / μεταβλητές περιβάλλοντος: [../providers-reference.md](../providers-reference.md)
-- Ρύθμιση καναλιών + λίστες επιτρεπόμενων (allowlists): [../channels-reference.md](../channels-reference.md)
-- Προεπιλογές και κλειδιά παραμέτρων (config): [../config-reference.md](../config-reference.md)
+## 1. Βασικές Αναφορές
 
-## Επεκτάσεις παρόχων και ενσωμάτωσης
+- **Commands Reference**: [../commands-reference.md](../commands-reference.md)
+- **Providers & API Keys**: [../providers-reference.md](../providers-reference.md)
+- **Channels & Allowlists**: [../channels-reference.md](../channels-reference.md)
+- **Configuration Reference**: [../config-reference.md](../config-reference.md)
 
-- Προσαρμοσμένα τελικά σημεία (endpoints) παρόχων: [../custom-providers.md](../custom-providers.md)
-- Εισαγωγή παρόχων Z.AI / GLM (onboarding): [../zai-glm-setup.md](../zai-glm-setup.md)
-- Ενσωμάτωση bot στο Nextcloud Talk: [../nextcloud-talk-setup.md](../nextcloud-talk-setup.md)
-- Πρότυπα ενσωμάτωσης βασισμένα στο LangGraph: [../langgraph-integration.md](../langgraph-integration.md)
+---
 
-## Χρήση
+## 2. Οδηγοί Ενσωμάτωσης και Παροχών
 
-Χρησιμοποιήστε αυτήν τη συλλογή όταν χρειάζεστε ακριβείς λεπτομέρειες CLI/παραμέτρων ή πρότυπα ενσωμάτωσης παρόχων, αντί για οδηγούς βήμα προς βήμα (tutorials).
+- **Προσαρμοσμένοι Πάροχοι**: [../custom-providers.md](../custom-providers.md)
+- **Z.AI GLM Setup**: [../zai-glm-setup.md](../zai-glm-setup.md)
+- **Nextcloud Talk Bot**: [../nextcloud-talk-setup.md](../nextcloud-talk-setup.md)
+- **LangGraph Integration**: [../langgraph-integration.md](../langgraph-integration.md)
 
-Όταν προσθέτετε ένα νέο έγγραφο αναφοράς ή ενσωμάτωσης, βεβαιωθείτε ότι υπάρχει σύνδεσμος τόσο στο [../SUMMARY.md](../SUMMARY.md) όσο και στο [../docs-inventory.md](../docs-inventory.md).
+---
+
+## 3. Οδηγίες Χρήσης
+
+Αυτή η συλλογή προορίζεται για γρήγορη εύρεση τεχνικών λεπτομερειών και προτύπων (templates), και όχι ως οδηγός βήμα-προς-βήμα (Tutorial).
+
+> [!IMPORTANT]
+> Κατά την προσθήκη νέου εγγράφου αναφοράς, διασφαλίστε την ενημέρωση των αρχείων [SUMMARY.md](../SUMMARY.md) και [docs-inventory.md](../docs-inventory.md).

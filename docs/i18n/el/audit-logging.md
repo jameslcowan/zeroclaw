@@ -1,21 +1,22 @@
-# Καταγραφή Ελέγχου (Audit Logging) για το ZeroClaw
+# Καταγραφή Ελέγχου (Audit Logging)
 
-> ⚠️ **Κατάσταση: Πρόταση / Οδικός Χάρτης (Roadmap)**
+> **Κατάσταση**: Πρόταση / Οδικός Χάρτης (Roadmap)
 >
-> Αυτό το έγγραφο περιγράφει προτεινόμενες προσεγγίσεις και ενδέχεται να περιλαμβάνει υποθετικές εντολές ή ρυθμίσεις.
-> Για την τρέχουσα συμπεριφορά, δείτε τα: config-reference.md, operations-runbook.md, και troubleshooting.md.
+> Αυτό το έγγραφο περιγράφει προτεινόμενες προσεγγίσεις και ενδέχεται να περιλαμβάνει υποθετικές εντολές ή ρυθμίσεις. Για την τρέχουσα συμπεριφορά, ανατρέξτε στα έγγραφα: [config-reference.md](config-reference.md), [operations-runbook.md](operations-runbook.md) και [troubleshooting.md](troubleshooting.md).
 
-## Πρόβλημα
-Το ZeroClaw καταγράφει ενέργειες, αλλά στερείται ιχνών ελέγχου (audit trails) με απόδειξη παραποίησης για:
-- Ποιος εκτέλεσε ποια εντολή
-- Πότε και από ποιο κανάλι
-- Ποιοι πόροι προσπελάστηκαν
-- Εάν ενεργοποιήθηκαν πολιτικές ασφαλείας
+## Περιγραφή Προβλήματος
+
+Το ZeroClaw απαιτεί έναν μηχανισμό καταγραφής ελέγχου (audit trails) με προστασία από παραποίηση, προκειμένου να τεκμηριώνονται:
+- Η ταυτότητα του χρήστη που εκτέλεσε μια εντολή.
+- Η χρονική στιγμή και το κανάλι επικοινωνίας.
+- Οι πόροι που προσπελάστηκαν.
+- Η εφαρμογή των πολιτικών ασφαλείας.
 
 ---
 
-## Προτεινόμενη Μορφή Log Ελέγχου
+## Προτεινόμενη Μορφή Συμβάντος (Log Format)
 
+```json
 {
   "timestamp": "2026-02-16T12:34:56Z",
   "event_id": "evt_1a2b3c4d",
@@ -40,30 +41,16 @@
     "policy_violation": false,
     "rate_limit_remaining": 19
   },
-  "signature": "SHA256:abc123..."  // HMAC για απόδειξη μη παραποίησης
+  "signature": "SHA256:abc123..."  // Υπογραφή HMAC για ακεραιότητα δεδομένων
 }
-
-
+```
 
 ---
 
 ## Υλοποίηση (Implementation)
 
+```rust
 // src/security/audit.rs
-use serde::{Deserialize, Serialize};
-use std::io::Write;
-use std::path::PathBuf;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuditEvent {
-    pub timestamp: String,
-    pub event_id: String,
-    pub event_type: AuditEventType,
-    pub actor: Actor,
-    pub action: Action,
-    pub result: ExecutionResult,
-    pub security: SecurityContext,
-}
 
 pub enum AuditEventType {
     CommandExecution,
@@ -83,10 +70,10 @@ impl AuditLogger {
     pub fn log(&self, event: &AuditEvent) -> anyhow::Result<()> {
         let mut line = serde_json::to_string(event)?;
 
-        // Προσθήκη υπογραφής HMAC εάν έχει ρυθμιστεί κλειδί
+        // Προσθήκη υπογραφής HMAC για προστασία από παραποίηση
         if let Some(ref key) = self.signing_key {
             let signature = compute_hmac(key, line.as_bytes());
-            line.push_str(&format!("\n\"signature\": \"{}\"", signature));
+            line.push_str(&format!(",\"signature\": \"{}\"", signature));
         }
 
         let mut file = std::fs::OpenOptions::new()
@@ -95,71 +82,76 @@ impl AuditLogger {
             .open(&self.log_path)?;
 
         writeln!(file, "{}", line)?;
-        file.sync_all()?;  // Αναγκαστικό άδειασμα buffer για ανθεκτικότητα
+        file.sync_all()?; // Διασφάλιση εγγραφής στον δίσκο
         Ok(())
     }
 }
+```
 
 ---
 
 ## Σχήμα Ρυθμίσεων (Config Schema)
 
+```toml
 [security.audit]
 enabled = true
 log_path = "~/.config/zeroclaw/audit.log"
 max_size_mb = 100
-rotate = "daily"  # daily | weekly | size
+rotate = "daily"  # Επιλογές: daily | weekly | size
 
-# Απόδειξη παραποίησης (Tamper evidence)
+# Προστασία ακεραιότητας (Tamper evidence)
 sign_events = true
 signing_key_path = "~/.config/zeroclaw/audit.key"
 
-# Τι θα καταγράφεται
+# Πεδίο εφαρμογής καταγραφής
 log_commands = true
 log_file_access = true
 log_auth_events = true
 log_policy_violations = true
+```
 
 ---
 
-## CLI Ερωτημάτων Ελέγχου
+## CLI Διαχείρισης Ελέγχου
 
-# Εμφάνιση όλων των εντολών που εκτελέστηκαν από τον χρήστη @alice
+```bash
+# Αναζήτηση εντολών από συγκεκριμένο χρήστη
 zeroclaw audit --user @alice
 
-# Εμφάνιση όλων των εντολών υψηλού κινδύνου
+# Προβολή συμβάντων υψηλού κινδύνου
 zeroclaw audit --risk high
 
-# Εμφάνιση παραβιάσεων των τελευταίων 24 ωρών
+# Εμφάνιση παραβιάσεων πολιτικής του τελευταίου 24ώρου
 zeroclaw audit --since 24h --violations-only
 
-# Επαλήθευση ακεραιότητας των logs
+# Επαλήθευση ακεραιότητας των αρχείων καταγραφής
 zeroclaw audit --verify-signatures
+```
 
 ---
 
-## Εναλλαγή Αρχείων Log (Log Rotation)
+## Διαχείριση Αρχείων (Log Rotation)
 
+Το σύστημα υποστηρίζει αυτόματη εναλλαγή αρχείων όταν συμπληρωθεί το μέγιστο μέγεθος ή παρέλθει το ορισμένο χρονικό διάστημα.
 
-
+```rust
 pub fn rotate_audit_log(log_path: &PathBuf, max_size: u64) -> anyhow::Result<()> {
     let metadata = std::fs::metadata(log_path)?;
     if metadata.len() < max_size {
         return Ok(());
     }
-
-    // Εναλλαγή: audit.log -> audit.log.1 -> audit.log.2 -> ...
-    // [Ο κώδικας διαχείρισης αρχείων]
+    // Διαδικασία εναλλαγής αρχείων (π.χ. audit.log -> audit.log.1)
     Ok(())
 }
+```
 
 ---
 
-## Προτεραιότητα Υλοποίησης
+## Προτεραιότητες Υλοποίησης
 
-| Φάση | Λειτουργία | Κόπος | Αξία Ασφαλείας |
-|-------|---------|--------|----------------|
-| **P0** | Βασική καταγραφή συμβάντων | Χαμηλός | Μέτρια |
-| **P1** | CLI ερωτημάτων (Query CLI) | Μέτριος | Μέτρια |
-| **P2** | Υπογραφή HMAC | Μέτριος | Υψηλή |
-| **P3** | Εναλλαγή αρχείων + Αρχειοθέτηση | Χαμηλός | Μέτρια |
+| Φάση | Λειτουργικότητα | Επίπεδο Προσπάθειας | Αξία Ασφαλείας |
+|:---|:---|:---|:---|
+| **P0** | Βασική καταγραφή συμβάντων | Χαμηλό | Μέτρια |
+| **P1** | CLI αναζήτησης και αναφορών | Μέτριο | Μέτρια |
+| **P2** | Ψηφιακή υπογραφή HMAC | Μέτριο | Υψηλή |
+| **P3** | Αυτόματη εναλλαγή και αρχειοθέτηση | Χαμηλό | Μέτρια |

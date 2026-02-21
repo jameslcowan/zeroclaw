@@ -1,21 +1,31 @@
-# Τεκμηρίωση υλικού και περιφερειακών
+# Τεκμηρίωση Υλικού και Περιφερειακών (Hardware)
 
-Για την ενσωμάτωση πλακετών, τη ροή υλικολογισμικού και την αρχιτεκτονική περιφερειακών.
+Οδηγίες για την ενσωμάτωση πλακετών, τη διαχείριση υλικολογισμικού (firmware) και την αρχιτεκτονική περιφερειακών του ZeroClaw.
 
-Το υποσύστημα υλικού του ZeroClaw επιτρέπει τον άμεσο έλεγχο μικροελεγκτών και περιφερειακών μέσω του χαρακτηριστικού (trait) `Peripheral`. 
-Κάθε πλακέτα εκθέτει εργαλεία για λειτουργίες GPIO, ADC και αισθητήρων, επιτρέποντας την αλληλεπίδραση με το υλικό μέσω πράκτορα (agent-driven) σε πλακέτες όπως STM32 Nucleo, Raspberry Pi και ESP32. 
-Δείτε το [hardware-peripherals-design.md](../hardware-peripherals-design.md) για την πλήρη αρχιτεκτονική.
+---
 
-## Σημεία εισόδου
+## 1. Υποσύστημα Υλικού
 
-- Αρχιτεκτονική και μοντέλο περιφερειακών: [../hardware-peripherals-design.md](../hardware-peripherals-design.md)
-- Προσθήκη νέας πλακέτας/εργαλείου: [../adding-boards-and-tools.md](../adding-boards-and-tools.md)
-- Ρύθμιση Nucleo: [../nucleo-setup.md](../nucleo-setup.md)
-- Ρύθμιση Arduino Uno R4 WiFi: [../arduino-uno-q-setup.md](../arduino-uno-q-setup.md)
+Το ZeroClaw επιτρέπει τον άμεσο έλεγχο μικροελεγκτών και περιφερειακών συσκευών μέσω του trait `Peripheral`. Κάθε υποστηριζόμενη πλακέτα εκθέτει εξειδικευμένα εργαλεία για λειτουργίες **GPIO**, **ADC** και ανάγνωση αισθητήρων.
 
-## Φύλλα δεδομένων (Datasheets)
+Η αλληλεπίδραση με το υλικό καθοδηγείται από τον πράκτορα (agent-driven), υποστηρίζοντας πλατφόρμες όπως:
+- **STM32 Nucleo**
+- **ESP32**
+- **Raspberry Pi**
+- **Arduino**
 
-- Ευρετήριο φύλλων δεδομένων: [../datasheets](../datasheets)
-- STM32 Nucleo-F401RE: [../datasheets/nucleo-f401re.md](../datasheets/nucleo-f401re.md)
-- Arduino Uno: [../datasheets/arduino-uno.md](../datasheets/arduino-uno.md)
-- ESP32: [../datasheets/esp32.md](../datasheets/esp32.md)
+## 2. Τεχνική Τεκμηρίωση
+
+- **Αρχιτεκτονική Περιφερειακών**: [../hardware-peripherals-design.md](../hardware-peripherals-design.md)
+- **Ανάπτυξη Νέων Πλακετών/Εργαλείων**: [../adding-boards-and-tools.md](../adding-boards-and-tools.md)
+- **Οδηγός Ρύθμισης Nucleo**: [../nucleo-setup.md](../nucleo-setup.md)
+- **Οδηγός Ρύθμισης Arduino Uno R4 WiFi**: [../arduino-uno-q-setup.md](../arduino-uno-q-setup.md)
+
+---
+
+## 3. Φύλλα Δεδομένων (Datasheets)
+
+- **Ευρετήριο Φύλλων Δεδομένων**: [../datasheets](../datasheets)
+- **STM32 Nucleo-F401RE**: [../datasheets/nucleo-f401re.md](../datasheets/nucleo-f401re.md)
+- **Arduino Uno**: [../datasheets/arduino-uno.md](../datasheets/arduino-uno.md)
+- **ESP32**: [../datasheets/esp32.md](../datasheets/esp32.md)

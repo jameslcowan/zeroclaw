@@ -1,24 +1,29 @@
-# Τεκμηρίωση ασφαλείας (Security Docs)
+# Τεκμηρίωση Ασφάλειας (Security)
 
-Αυτή η ενότητα περιλαμβάνει έναν συνδυασμό τρεχουσών οδηγιών θωράκισης (hardening), καθώς και εγγράφων προτάσεων και οδικού χάρτη (roadmap).
+Αυτή η ενότητα περιλαμβάνει οδηγούς θωράκισης (Hardening) για την τρέχουσα λειτουργία του συστήματος, καθώς και μελλοντικές προτάσεις ασφαλείας.
 
-## Προτεραιότητα στην τρέχουσα συμπεριφορά
+---
 
-Για την τρέχουσα συμπεριφορά του περιβάλλοντος εκτέλεσης (runtime), ξεκινήστε από εδώ:
+## 1. Τρέχουσα Λειτουργία και Hardening
 
-- Αναφορά παραμέτρων (Config reference): [../config-reference.md](../config-reference.md)
-- Εγχειρίδιο λειτουργίας (Operations runbook): [../operations-runbook.md](../operations-runbook.md)
-- Αντιμετώπιση προβλημάτων: [../troubleshooting.md](../troubleshooting.md)
+Για τις ισχύουσες ρυθμίσεις ασφάλειας και τη διαχείριση του περιβάλλοντος εκτέλεσης (Runtime), συμβουλευτείτε τα παρακάτω:
 
-[Image of a tiered security architecture model showing hardening, monitoring, and sandbox layers]
+- **Configuration Reference**: [../config-reference.md](../config-reference.md)
+- **Operations Runbook**: [../operations-runbook.md](../operations-runbook.md)
+- **Troubleshooting**: [../troubleshooting.md](../troubleshooting.md)
 
-## Έγγραφα προτάσεων / Οδικού χάρτη (Roadmap)
+---
 
-Τα ακόλουθα έγγραφα έχουν ρητά τον χαρακτήρα πρότασης και ενδέχεται να περιλαμβάνουν υποθετικά παραδείγματα CLI/παραμέτρων:
+## 2. Προτάσεις και Οδικός Χάρτης (Roadmap)
 
-- [../agnostic-security.md](../agnostic-security.md)
-- [../frictionless-security.md](../frictionless-security.md)
-- [../sandboxing.md](../sandboxing.md)
-- [../resource-limits.md](../resource-limits.md)
-- [../audit-logging.md](../audit-logging.md)
-- [../security-roadmap.md](../security-roadmap.md)
+Τα παρακάτω έγγραφα περιγράφουν **προτεινόμενες** στρατηγικές και ενδέχεται να περιλαμβάνουν υποθετικά παραδείγματα ρυθμίσεων:
+
+- **Security Roadmap**: [../security-roadmap.md](../security-roadmap.md)
+- **Agnostic Security**: [../agnostic-security.md](../agnostic-security.md)
+- **Frictionless Security**: [../frictionless-security.md](../frictionless-security.md)
+- **Sandboxing Strategies**: [../sandboxing.md](../sandboxing.md)
+- **Resource Limits**: [../resource-limits.md](../resource-limits.md)
+- **Audit Logging**: [../audit-logging.md](../audit-logging.md)
+
+> [!IMPORTANT]
+> Τα έγγραφα της ενότητας "Roadmap" αποτελούν προτάσεις σχεδιασμού και δεν αντικατοπτρίζουν απαραίτητα την τρέχουσα υλοποίηση του ZeroClaw.

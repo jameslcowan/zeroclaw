@@ -1,24 +1,30 @@
-# Τεκμηρίωση λειτουργιών και ανάπτυξης (Operations & Deployment)
+# Επιχειρήσεις και Ανάπτυξη (Operations & Deployment)
 
-Για χειριστές που εκτελούν το ZeroClaw σε μόνιμα περιβάλλοντα ή περιβάλλοντα παραγωγής.
+Τεχνική τεκμηρίωση για τον χειρισμό, τη συντήρηση και την ανάπτυξη του ZeroClaw σε περιβάλλοντα παραγωγής.
 
-## Βασικές λειτουργίες
+---
 
-- Εγχειρίδιο λειτουργίας Day-2 (Runbook): [../operations-runbook.md](../operations-runbook.md)
-- Εγχειρίδιο διαδικασίας έκδοσης: [../release-process.md](../release-process.md)
-- Πίνακας αντιμετώπισης προβλημάτων: [../troubleshooting.md](../troubleshooting.md)
-- Ασφαλής ανάπτυξη δικτύου/πύλης (Gateway): [../network-deployment.md](../network-deployment.md)
-- Ρύθμιση Mattermost (ανά κανάλι): [../mattermost-setup.md](../mattermost-setup.md)
+## 1. Βασικές Λειτουργίες και Εγχειρίδια
 
-## Συνήθης ροή εργασιών
+- **Operations Runbook (Day-2)**: [../operations-runbook.md](../operations-runbook.md)
+- **Διαδικασία Έκδοσης (Release Process)**: [../release-process.md](../release-process.md)
+- **Αντιμετώπιση Προβλημάτων (Troubleshooting)**: [../troubleshooting.md](../troubleshooting.md)
+- **Ανάπτυξη Δικτύου και Πύλης (Gateway)**: [../network-deployment.md](../network-deployment.md)
+- **Ρύθμιση Mattermost**: [../mattermost-setup.md](../mattermost-setup.md)
 
-1. Επικύρωση περιβάλλοντος εκτέλεσης (`status`, `doctor`, `channel doctor`)
-2. Εφαρμογή μίας αλλαγής παραμέτρων (config) τη φορά
-3. Επανεκκίνηση υπηρεσίας/δαίμονα (service/daemon)
-4. Επαλήθευση κατάστασης καναλιού και πύλης (gateway health)
-5. Γρήγορη επαναφορά (roll back) εάν η συμπεριφορά παρουσιάσει υποτροπή
+---
 
-## Σχετικά
+## 2. Τυπική Ροή Εργασιών Συντήρησης
 
-- Αναφορά παραμέτρων (Config reference): [../config-reference.md](../config-reference.md)
-- Συλλογή ασφαλείας: [../security/README.md](../security/README.md)
+1. **Επαλήθευση Περιβάλλοντος**: Χρήση των εντολών `status`, `doctor` και `channel doctor`.
+2. **Διαχείριση Ρυθμίσεων**: Εφαρμογή μεμονωμένων αλλαγών στο αρχείο παραμέτρων (Config).
+3. **Επανεκκίνηση Υπηρεσιών**: Ανανέωση των daemons για την εφαρμογή των αλλαγών.
+4. **Έλεγχος Υγείας (Health Check)**: Επιβεβαίωση της σωστής λειτουργίας καναλιών και πύλης.
+5. **Επαναφορά (Rollback)**: Άμεση επιστροφή σε προηγούμενη σταθερή κατάσταση σε περίπτωση δυσλειτουργίας.
+
+---
+
+## 3. Σχετικά Έγγραφα
+
+- **Αναφορά Παραμέτρων (Config Reference)**: [../config-reference.md](../config-reference.md)
+- **Πολιτικές Ασφάλειας (Security)**: [../security/README.md](../security/README.md)

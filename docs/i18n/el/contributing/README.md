@@ -1,16 +1,20 @@
-# Τεκμηρίωση συνεισφοράς, αναθεώρησης και CI
+# Οδηγοί Συνεισφοράς και CI (Contributing & CI)
 
-Για συνεισφέροντες, αναθεωρητές και συντηρητές.
+Αυτός ο φάκελος περιέχει τεκμηρίωση για τους συνεισφέροντες (contributors), τους αναθεωρητές (reviewers) και τους συντηρητές (maintainers) του ZeroClaw.
 
-## Βασικές πολιτικές
+---
 
-- Οδηγός συνεισφοράς: [../../CONTRIBUTING.md](../../CONTRIBUTING.md)
-- Κανόνες ροής εργασιών PR: [../pr-workflow.md](../pr-workflow.md)
-- Εγχειρίδιο αναθεωρητή: [../reviewer-playbook.md](../reviewer-playbook.md)
-- Χάρτης και ιδιοκτησία CI: [../ci-map.md](../ci-map.md)
-- Πολιτική προέλευσης ενεργειών: [../actions-source-policy.md](../actions-source-policy.md)
+## Βασικές Πολιτικές
 
-## Προτεινόμενη σειρά ανάγνωσης
+- **Οδηγός Συνεισφοράς**: [../../CONTRIBUTING.md](../../CONTRIBUTING.md)
+- **Ροή Εργασιών PR**: [../pr-workflow.md](../pr-workflow.md)
+- **Εγχειρίδιο Αναθεωρητή**: [../reviewer-playbook.md](../reviewer-playbook.md)
+- **Χάρτης και Ιδιοκτησία CI**: [../ci-map.md](../ci-map.md)
+- **Πολιτική Ενεργειών (Actions)**: [../actions-source-policy.md](../actions-source-policy.md)
+
+---
+
+## Προτεινόμενη Σειρά Ανάγνωσης
 
 1. `CONTRIBUTING.md`
 2. `docs/pr-workflow.md`
