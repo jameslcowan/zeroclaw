@@ -32,4 +32,5 @@
 
 ## Επόμενα Βήματα
 
-* **Λειτουργίες την ώρα που τρέχει το πρόγραμμα:** [../operations/README.md](../operations/
+Runtime operations: ../operations/README.md
+Reference catalogs: ../reference/README.md
