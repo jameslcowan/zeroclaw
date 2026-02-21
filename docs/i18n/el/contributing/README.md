@@ -6,7 +6,7 @@
 
 ## Βασικές Πολιτικές
 
-- **Οδηγός Συνεισφοράς**: [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Οδηγός Συνεισφοράς**: [../../../../CONTRIBUTING.md](../../../../CONTRIBUTING.md)
 - **Ροή Εργασιών PR**: [../pr-workflow.md](../pr-workflow.md)
 - **Εγχειρίδιο Αναθεωρητή**: [../reviewer-playbook.md](../reviewer-playbook.md)
 - **Χάρτης και Ιδιοκτησία CI**: [../ci-map.md](../ci-map.md)
