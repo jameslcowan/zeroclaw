@@ -33,8 +33,8 @@ pub struct OpenAiCompatibleProvider {
     /// to the first `user` message, then drop the system messages.
     /// Required for providers that reject `role: system` (e.g. MiniMax).
     merge_system_into_user: bool,
-    /// Whether this provider supports OpenAI-style native tool definitions
-    /// in API payloads.
+    /// Whether this provider supports OpenAI-style native tool calling.
+    /// When false, tools are injected into the system prompt as text.
     native_tool_calling: bool,
 }
 
@@ -2394,16 +2394,19 @@ mod tests {
     }
 
     #[test]
-    fn merge_system_constructor_disables_native_tool_calling() {
+    fn minimax_provider_disables_native_tool_calling() {
         let p = OpenAiCompatibleProvider::new_merge_system_into_user(
             "MiniMax",
-            "https://api.minimaxi.com/v1",
+            "https://api.minimax.chat/v1",
             Some("k"),
             AuthStyle::Bearer,
         );
         let caps = <OpenAiCompatibleProvider as Provider>::capabilities(&p);
-        assert!(!caps.native_tool_calling);
-        assert!(!p.supports_native_tools());
+        assert!(
+            !caps.native_tool_calling,
+            "MiniMax should use prompt-guided tool calling, not native"
+        );
+        assert!(!caps.vision);
     }
 
     #[test]
