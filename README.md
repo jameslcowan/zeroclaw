@@ -299,6 +299,9 @@ zeroclaw onboard --force
 # Or quickly repair channels/allowlists only
 zeroclaw onboard --channels-only
 
+# Note: onboarding configures ZeroClaw provider/model/channel/memory settings.
+# MCP server registration is managed outside this wizard by your MCP-capable runtime/client.
+
 # Chat
 zeroclaw agent -m "Hello, ZeroClaw!"
 
@@ -804,6 +807,7 @@ ZeroClaw supports [Osaurus](https://github.com/dinoki-ai/osaurus) as a first-cla
 - Provider ID: `osaurus`
 - Default endpoint: `http://localhost:1337/v1`
 - API key defaults to `"osaurus"` but is optional
+- MCP server setup is managed in Osaurus itself; `zeroclaw onboard` does not register MCP servers
 
 Example setup:
 
