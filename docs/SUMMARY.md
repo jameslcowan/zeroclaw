@@ -12,6 +12,7 @@ Last refreshed: **February 18, 2026**.
 - Russian README: [../README.ru.md](../README.ru.md)
 - French README: [../README.fr.md](../README.fr.md)
 - Vietnamese README: [../README.vi.md](../README.vi.md)
+- Greek README: [../README.el.md](../README.el.md)
 - English Docs Hub: [README.md](README.md)
 - Chinese Docs Hub: [README.zh-CN.md](README.zh-CN.md)
 - Japanese Docs Hub: [README.ja.md](README.ja.md)
