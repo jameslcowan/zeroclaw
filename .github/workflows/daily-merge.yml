@@ -1,0 +1,46 @@
+name: Daily Dev to Main
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+  workflow_dispatch:  # Manual trigger option
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.DEPLOY_TOKEN }}
+
+      - name: Configure git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch latest branches
+        run: git fetch origin dev main
+
+      - name: Fast-forward merge dev into main
+        run: |
+          git checkout main
+          git reset --hard origin/main
+          if git merge origin/dev --ff-only; then
+            echo "Fast-forward merge succeeded"
+          else
+            echo "::error::Merge failed — dev has diverged from main. Create a manual PR to resolve conflicts."
+            exit 1
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+      - name: Push main
+        run: git push origin main
