@@ -36,6 +36,10 @@ pub struct OpenAiCompatibleProvider {
     /// Whether this provider supports OpenAI-style native tool calling.
     /// When false, tools are injected into the system prompt as text.
     native_tool_calling: bool,
+    /// Selects the primary protocol for this compatible endpoint.
+    api_mode: CompatibleApiMode,
+    /// Optional output token cap added to outgoing requests.
+    max_tokens_override: Option<u32>,
 }
 
 /// How the provider expects the API key to be sent.
@@ -49,6 +53,16 @@ pub enum AuthStyle {
     Custom(String),
 }
 
+/// API mode for OpenAI-compatible endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompatibleApiMode {
+    /// Default mode: call chat-completions first, then optionally fall back to
+    /// `/responses` for providers that expose that API.
+    OpenAiChatCompletions,
+    /// Responses-first mode: call `/responses` directly.
+    OpenAiResponses,
+}
+
 impl OpenAiCompatibleProvider {
     pub fn new(
         name: &str,
@@ -57,7 +71,16 @@ impl OpenAiCompatibleProvider {
         auth_style: AuthStyle,
     ) -> Self {
         Self::new_with_options(
-            name, base_url, credential, auth_style, false, true, None, false,
+            name,
+            base_url,
+            credential,
+            auth_style,
+            false,
+            true,
+            None,
+            false,
+            CompatibleApiMode::OpenAiChatCompletions,
+            None,
         )
     }
 
@@ -77,6 +100,8 @@ impl OpenAiCompatibleProvider {
             true,
             None,
             false,
+            CompatibleApiMode::OpenAiChatCompletions,
+            None,
         )
     }
 
@@ -89,7 +114,16 @@ impl OpenAiCompatibleProvider {
         auth_style: AuthStyle,
     ) -> Self {
         Self::new_with_options(
-            name, base_url, credential, auth_style, false, false, None, false,
+            name,
+            base_url,
+            credential,
+            auth_style,
+            false,
+            false,
+            None,
+            false,
+            CompatibleApiMode::OpenAiChatCompletions,
+            None,
         )
     }
 
@@ -113,6 +147,8 @@ impl OpenAiCompatibleProvider {
             true,
             Some(user_agent),
             false,
+            CompatibleApiMode::OpenAiChatCompletions,
+            None,
         )
     }
 
@@ -133,6 +169,8 @@ impl OpenAiCompatibleProvider {
             true,
             Some(user_agent),
             false,
+            CompatibleApiMode::OpenAiChatCompletions,
+            None,
         )
     }
 
@@ -145,7 +183,39 @@ impl OpenAiCompatibleProvider {
         auth_style: AuthStyle,
     ) -> Self {
         Self::new_with_options(
-            name, base_url, credential, auth_style, false, false, None, true,
+            name,
+            base_url,
+            credential,
+            auth_style,
+            false,
+            false,
+            None,
+            true,
+            CompatibleApiMode::OpenAiChatCompletions,
+            None,
+        )
+    }
+
+    /// Constructor used by `custom:` providers to choose explicit protocol mode.
+    pub fn new_custom_with_mode(
+        name: &str,
+        base_url: &str,
+        credential: Option<&str>,
+        auth_style: AuthStyle,
+        api_mode: CompatibleApiMode,
+        max_tokens_override: Option<u32>,
+    ) -> Self {
+        Self::new_with_options(
+            name,
+            base_url,
+            credential,
+            auth_style,
+            false,
+            true,
+            None,
+            false,
+            api_mode,
+            max_tokens_override,
         )
     }
 
@@ -158,6 +228,8 @@ impl OpenAiCompatibleProvider {
         supports_responses_fallback: bool,
         user_agent: Option<&str>,
         merge_system_into_user: bool,
+        api_mode: CompatibleApiMode,
+        max_tokens_override: Option<u32>,
     ) -> Self {
         Self {
             name: name.to_string(),
@@ -168,6 +240,9 @@ impl OpenAiCompatibleProvider {
             supports_responses_fallback,
             user_agent: user_agent.map(ToString::to_string),
             merge_system_into_user,
+            native_tool_calling: !merge_system_into_user,
+            api_mode,
+            max_tokens_override: max_tokens_override.filter(|value| *value > 0),
         }
     }
 
@@ -309,6 +384,8 @@ struct ApiChatRequest {
     model: String,
     messages: Vec<Message>,
     temperature: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -502,6 +579,8 @@ struct NativeChatRequest {
     messages: Vec<NativeMessage>,
     temperature: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<serde_json::Value>>,
@@ -531,6 +610,12 @@ struct ResponsesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
 }
 
@@ -550,6 +635,14 @@ struct ResponsesResponse {
 
 #[derive(Debug, Deserialize)]
 struct ResponsesOutput {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+    #[serde(default)]
+    call_id: Option<String>,
     #[serde(default)]
     content: Vec<ResponsesContent>,
 }
@@ -755,7 +848,7 @@ fn build_responses_prompt(messages: &[ChatMessage]) -> (Option<String>, Vec<Resp
     (instructions, input)
 }
 
-fn extract_responses_text(response: ResponsesResponse) -> Option<String> {
+fn extract_responses_text(response: &ResponsesResponse) -> Option<String> {
     if let Some(text) = first_nonempty(response.output_text.as_deref()) {
         return Some(text);
     }
@@ -779,6 +872,40 @@ fn extract_responses_text(response: ResponsesResponse) -> Option<String> {
     }
 
     None
+}
+
+fn extract_responses_tool_calls(response: &ResponsesResponse) -> Vec<ProviderToolCall> {
+    response
+        .output
+        .iter()
+        .filter(|item| item.kind.as_deref() == Some("function_call"))
+        .filter_map(|item| {
+            let name = item.name.clone()?;
+            let arguments = item
+                .arguments
+                .clone()
+                .unwrap_or_else(|| "{}".to_string());
+            Some(ProviderToolCall {
+                id: item
+                    .call_id
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                name,
+                arguments,
+            })
+        })
+        .collect()
+}
+
+fn parse_responses_chat_response(response: ResponsesResponse) -> ProviderChatResponse {
+    let text = extract_responses_text(&response);
+    let tool_calls = extract_responses_tool_calls(&response);
+    ProviderChatResponse {
+        text,
+        tool_calls,
+        usage: None,
+        reasoning_content: None,
+    }
 }
 
 fn compact_sanitized_body_snippet(body: &str) -> String {
@@ -810,6 +937,14 @@ fn parse_responses_response_body(
 }
 
 impl OpenAiCompatibleProvider {
+    fn should_use_responses_mode(&self) -> bool {
+        self.api_mode == CompatibleApiMode::OpenAiResponses
+    }
+
+    fn effective_max_tokens(&self) -> Option<u32> {
+        self.max_tokens_override.filter(|value| *value > 0)
+    }
+
     fn apply_auth_header(
         &self,
         req: reqwest::RequestBuilder,
@@ -822,12 +957,13 @@ impl OpenAiCompatibleProvider {
         }
     }
 
-    async fn chat_via_responses(
+    async fn send_responses_request(
         &self,
         credential: &str,
         messages: &[ChatMessage],
         model: &str,
-    ) -> anyhow::Result<String> {
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> anyhow::Result<ResponsesResponse> {
         let (instructions, input) = build_responses_prompt(messages);
         if input.is_empty() {
             anyhow::bail!(
@@ -836,10 +972,14 @@ impl OpenAiCompatibleProvider {
             );
         }
 
+        let tools = tools.filter(|items| !items.is_empty());
         let request = ResponsesRequest {
             model: model.to_string(),
             input,
             instructions,
+            max_output_tokens: self.effective_max_tokens(),
+            tool_choice: tools.as_ref().map(|_| "auto".to_string()),
+            tools,
             stream: Some(false),
         };
 
@@ -856,10 +996,38 @@ impl OpenAiCompatibleProvider {
         }
 
         let body = response.text().await?;
-        let responses = parse_responses_response_body(&self.name, &body)?;
+        parse_responses_response_body(&self.name, &body)
+    }
 
-        extract_responses_text(responses)
+    async fn chat_via_responses_text(
+        &self,
+        credential: &str,
+        messages: &[ChatMessage],
+        model: &str,
+    ) -> anyhow::Result<String> {
+        let responses = self
+            .send_responses_request(credential, messages, model, None)
+            .await?;
+
+        extract_responses_text(&responses)
             .ok_or_else(|| anyhow::anyhow!("No response from {} Responses API", self.name))
+    }
+
+    async fn chat_via_responses_chat(
+        &self,
+        credential: &str,
+        messages: &[ChatMessage],
+        model: &str,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> anyhow::Result<ProviderChatResponse> {
+        let responses = self
+            .send_responses_request(credential, messages, model, tools)
+            .await?;
+        let parsed = parse_responses_chat_response(responses);
+        if parsed.text.is_none() && parsed.tool_calls.is_empty() {
+            anyhow::bail!("No response from {} Responses API", self.name);
+        }
+        Ok(parsed)
     }
 
     fn convert_tool_specs(
@@ -1082,10 +1250,7 @@ impl OpenAiCompatibleProvider {
 impl Provider for OpenAiCompatibleProvider {
     fn capabilities(&self) -> crate::providers::traits::ProviderCapabilities {
         crate::providers::traits::ProviderCapabilities {
-            // Providers that require system-prompt merging (e.g. MiniMax) also
-            // reject OpenAI-style `tools` in the request body.  Fall back to
-            // prompt-guided tool calling for those providers.
-            native_tool_calling: !self.merge_system_into_user,
+            native_tool_calling: self.native_tool_calling,
             vision: self.supports_vision,
         }
     }
@@ -1132,6 +1297,7 @@ impl Provider for OpenAiCompatibleProvider {
             model: model.to_string(),
             messages,
             temperature,
+            max_tokens: self.effective_max_tokens(),
             stream: Some(false),
             tools: None,
             tool_choice: None,
@@ -1150,6 +1316,12 @@ impl Provider for OpenAiCompatibleProvider {
             fallback_messages
         };
 
+        if self.should_use_responses_mode() {
+            return self
+                .chat_via_responses_text(credential, &fallback_messages, model)
+                .await;
+        }
+
         let response = match self
             .apply_auth_header(self.http_client().post(&url).json(&request), credential)
             .send()
@@ -1160,7 +1332,7 @@ impl Provider for OpenAiCompatibleProvider {
                 if self.supports_responses_fallback {
                     let sanitized = super::sanitize_api_error(&chat_error.to_string());
                     return self
-                        .chat_via_responses(credential, &fallback_messages, model)
+                        .chat_via_responses_text(credential, &fallback_messages, model)
                         .await
                         .map_err(|responses_err| {
                             anyhow::anyhow!(
@@ -1181,7 +1353,7 @@ impl Provider for OpenAiCompatibleProvider {
 
             if status == reqwest::StatusCode::NOT_FOUND && self.supports_responses_fallback {
                 return self
-                    .chat_via_responses(credential, &fallback_messages, model)
+                    .chat_via_responses_text(credential, &fallback_messages, model)
                     .await
                     .map_err(|responses_err| {
                         anyhow::anyhow!(
@@ -1246,10 +1418,17 @@ impl Provider for OpenAiCompatibleProvider {
             })
             .collect();
 
+        if self.should_use_responses_mode() {
+            return self
+                .chat_via_responses_text(credential, &effective_messages, model)
+                .await;
+        }
+
         let request = ApiChatRequest {
             model: model.to_string(),
             messages: api_messages,
             temperature,
+            max_tokens: self.effective_max_tokens(),
             stream: Some(false),
             tools: None,
             tool_choice: None,
@@ -1266,7 +1445,7 @@ impl Provider for OpenAiCompatibleProvider {
                 if self.supports_responses_fallback {
                     let sanitized = super::sanitize_api_error(&chat_error.to_string());
                     return self
-                        .chat_via_responses(credential, &effective_messages, model)
+                        .chat_via_responses_text(credential, &effective_messages, model)
                         .await
                         .map_err(|responses_err| {
                             anyhow::anyhow!(
@@ -1286,7 +1465,7 @@ impl Provider for OpenAiCompatibleProvider {
             // Mirror chat_with_system: 404 may mean this provider uses the Responses API
             if status == reqwest::StatusCode::NOT_FOUND && self.supports_responses_fallback {
                 return self
-                    .chat_via_responses(credential, &effective_messages, model)
+                    .chat_via_responses_text(credential, &effective_messages, model)
                     .await
                     .map_err(|responses_err| {
                         anyhow::anyhow!(
@@ -1352,10 +1531,22 @@ impl Provider for OpenAiCompatibleProvider {
             })
             .collect();
 
+        if self.should_use_responses_mode() {
+            return self
+                .chat_via_responses_chat(
+                    credential,
+                    &effective_messages,
+                    model,
+                    (!tools.is_empty()).then(|| tools.to_vec()),
+                )
+                .await;
+        }
+
         let request = ApiChatRequest {
             model: model.to_string(),
             messages: api_messages,
             temperature,
+            max_tokens: self.effective_max_tokens(),
             stream: Some(false),
             tools: if tools.is_empty() {
                 None
@@ -1453,10 +1644,17 @@ impl Provider for OpenAiCompatibleProvider {
         } else {
             request.messages.to_vec()
         };
+        if self.should_use_responses_mode() {
+            return self
+                .chat_via_responses_chat(credential, &effective_messages, model, tools.clone())
+                .await;
+        }
+        let response_tools = tools.clone();
         let native_request = NativeChatRequest {
             model: model.to_string(),
             messages: Self::convert_messages_for_native(&effective_messages),
             temperature,
+            max_tokens: self.effective_max_tokens(),
             stream: Some(false),
             tool_choice: tools.as_ref().map(|_| "auto".to_string()),
             tools,
@@ -1476,14 +1674,13 @@ impl Provider for OpenAiCompatibleProvider {
                 if self.supports_responses_fallback {
                     let sanitized = super::sanitize_api_error(&chat_error.to_string());
                     return self
-                        .chat_via_responses(credential, &effective_messages, model)
+                        .chat_via_responses_chat(
+                            credential,
+                            &effective_messages,
+                            model,
+                            response_tools.clone(),
+                        )
                         .await
-                        .map(|text| ProviderChatResponse {
-                            text: Some(text),
-                            tool_calls: vec![],
-                            usage: None,
-                            reasoning_content: None,
-                        })
                         .map_err(|responses_err| {
                             anyhow::anyhow!(
                                 "{} native chat transport error: {sanitized} (responses fallback failed: {responses_err})",
@@ -1517,14 +1714,13 @@ impl Provider for OpenAiCompatibleProvider {
 
             if status == reqwest::StatusCode::NOT_FOUND && self.supports_responses_fallback {
                 return self
-                    .chat_via_responses(credential, &effective_messages, model)
+                    .chat_via_responses_chat(
+                        credential,
+                        &effective_messages,
+                        model,
+                        response_tools.clone(),
+                    )
                     .await
-                    .map(|text| ProviderChatResponse {
-                        text: Some(text),
-                        tool_calls: vec![],
-                        usage: None,
-                        reasoning_content: None,
-                    })
                     .map_err(|responses_err| {
                         anyhow::anyhow!(
                             "{} API error ({status}): {sanitized} (chat completions unavailable; responses fallback failed: {responses_err})",
@@ -1554,7 +1750,7 @@ impl Provider for OpenAiCompatibleProvider {
     }
 
     fn supports_native_tools(&self) -> bool {
-        true
+        self.native_tool_calling
     }
 
     fn supports_streaming(&self) -> bool {
@@ -1599,6 +1795,7 @@ impl Provider for OpenAiCompatibleProvider {
             model: model.to_string(),
             messages,
             temperature,
+            max_tokens: self.effective_max_tokens(),
             stream: Some(options.enabled),
             tools: None,
             tool_choice: None,
@@ -1740,6 +1937,7 @@ mod tests {
                 },
             ],
             temperature: 0.4,
+            max_tokens: None,
             stream: Some(false),
             tools: None,
             tool_choice: None,
@@ -1816,6 +2014,21 @@ mod tests {
         assert!(matches!(p.auth_header, AuthStyle::Custom(_)));
     }
 
+    #[test]
+    fn custom_constructor_applies_responses_mode_and_max_tokens_override() {
+        let provider = OpenAiCompatibleProvider::new_custom_with_mode(
+            "custom",
+            "https://api.example.com",
+            Some("key"),
+            AuthStyle::Bearer,
+            CompatibleApiMode::OpenAiResponses,
+            Some(2048),
+        );
+
+        assert!(provider.should_use_responses_mode());
+        assert_eq!(provider.effective_max_tokens(), Some(2048));
+    }
+
     #[tokio::test]
     async fn all_compatible_providers_fail_without_key() {
         let providers = vec![
@@ -1845,7 +2058,7 @@ mod tests {
         let json = r#"{"output_text":"Hello from top-level","output":[]}"#;
         let response: ResponsesResponse = serde_json::from_str(json).unwrap();
         assert_eq!(
-            extract_responses_text(response).as_deref(),
+            extract_responses_text(&response).as_deref(),
             Some("Hello from top-level")
         );
     }
@@ -1856,7 +2069,7 @@ mod tests {
             r#"{"output":[{"content":[{"type":"output_text","text":"Hello from nested"}]}]}"#;
         let response: ResponsesResponse = serde_json::from_str(json).unwrap();
         assert_eq!(
-            extract_responses_text(response).as_deref(),
+            extract_responses_text(&response).as_deref(),
             Some("Hello from nested")
         );
     }
@@ -1866,9 +2079,29 @@ mod tests {
         let json = r#"{"output":[{"content":[{"type":"message","text":"Fallback text"}]}]}"#;
         let response: ResponsesResponse = serde_json::from_str(json).unwrap();
         assert_eq!(
-            extract_responses_text(response).as_deref(),
+            extract_responses_text(&response).as_deref(),
             Some("Fallback text")
         );
+    }
+
+    #[test]
+    fn responses_extracts_function_call_as_tool_call() {
+        let json = r#"{
+            "output":[
+                {
+                    "type":"function_call",
+                    "call_id":"call_abc",
+                    "name":"shell",
+                    "arguments":"{\"command\":\"date\"}"
+                }
+            ]
+        }"#;
+        let response: ResponsesResponse = serde_json::from_str(json).unwrap();
+        let parsed = parse_responses_chat_response(response);
+        assert_eq!(parsed.tool_calls.len(), 1);
+        assert_eq!(parsed.tool_calls[0].id, "call_abc");
+        assert_eq!(parsed.tool_calls[0].name, "shell");
+        assert_eq!(parsed.tool_calls[0].arguments, "{\"command\":\"date\"}");
     }
 
     #[test]
@@ -1899,7 +2132,7 @@ mod tests {
     async fn chat_via_responses_requires_non_system_message() {
         let provider = make_provider("custom", "https://api.example.com", Some("test-key"));
         let err = provider
-            .chat_via_responses("test-key", &[ChatMessage::system("policy")], "gpt-test")
+            .chat_via_responses_text("test-key", &[ChatMessage::system("policy")], "gpt-test")
             .await
             .expect_err("system-only fallback payload should fail");
 
@@ -2381,6 +2614,7 @@ mod tests {
                 content: MessageContent::Text("What is the weather?".to_string()),
             }],
             temperature: 0.7,
+            max_tokens: None,
             stream: Some(false),
             tools: Some(tools),
             tool_choice: Some("auto".to_string()),

@@ -14,6 +14,18 @@ api_key = "your-api-key"
 default_model = "your-model-name"
 ```
 
+Optional API mode:
+
+```toml
+# Default (chat-completions first, responses fallback when available)
+provider_api = "openai-chat-completions"
+
+# Responses-first mode (calls /responses directly)
+provider_api = "openai-responses"
+```
+
+`provider_api` is only valid when `default_provider` uses `custom:<url>`.
+
 ### Anthropic-Compatible Endpoints (`anthropic-custom:`)
 
 For services that implement the Anthropic API format:
