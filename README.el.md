@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Μηδενική επιβάρυνση. Κανένας συμβιβασμός. 100% Rust. 100% Agnostic.</strong><br>
-  ⚡️ <strong>Εκτελείται σε υλικό των 10$ με <5MB RAM: Αυτό είναι 99% λιγότερη μνήμη από το OpenClaw και 98% φθηνότερο από ένα Mac mini!</strong>
+  ⚡️ <strong>Εκτελείται σε hardware των 10$ με <5MB RAM: 99% λιγότερη μνήμη από το OpenClaw και 98% φθηνότερο από ένα Mac mini!</strong>
 </p>
 
 <p align="center">
