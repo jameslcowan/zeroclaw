@@ -20,6 +20,7 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 const COMPOSIO_API_BASE_V3: &str = "https://backend.composio.dev/api/v3";
+const COMPOSIO_API_BASE_V2: &str = "https://backend.composio.dev/api";
 const COMPOSIO_TOOL_VERSION_LATEST: &str = "latest";
 
 fn ensure_https(url: &str) -> anyhow::Result<()> {
@@ -218,45 +219,18 @@ impl ComposioTool {
                 .await?
         };
 
-        match self
-            .execute_action_v3(
-                &tool_slug,
-                params.clone(),
-                text,
-                entity_id,
-                resolved_account_ref.as_deref(),
-            )
-            .await
-        {
-            Ok(result) => Ok(result),
-            Err(v3_err) => {
-                // When text-mode was used, v2 fallback is not applicable
-                // because v2 has no NLP support.
-                if text.is_some() {
-                    anyhow::bail!(
-                        "Composio v3 NLP execute failed: {v3_err}{}",
-                        build_connected_account_hint(
-                            app_hint.as_deref(),
-                            normalized_entity_id.as_deref(),
-                            resolved_account_ref.as_deref(),
-                        )
-                    );
-                }
-
-                let mut v2_candidates = vec![action_name.trim().to_string()];
-                let legacy_action_name = normalize_legacy_action_name(action_name);
-                if !legacy_action_name.is_empty() && !v2_candidates.contains(&legacy_action_name) {
-                    v2_candidates.push(legacy_action_name);
-                }
-
-                let mut v2_errors = Vec::new();
-                for candidate in v2_candidates {
-                    match self
-                        .execute_action_v2(&candidate, params.clone(), entity_id)
-                        .await
-                    {
-                        Ok(result) => return Ok(result),
-                        Err(v2_err) => v2_errors.push(format!("{candidate}: {v2_err}")),
+        let mut slug_candidates = self.build_v3_slug_candidates(action_name);
+        let mut prime_error = None;
+        if slug_candidates.is_empty() {
+            if let Some(app) = app_hint.as_deref() {
+                match self.list_actions(Some(app)).await {
+                    Ok(_) => {
+                        slug_candidates = self.build_v3_slug_candidates(action_name);
+                    }
+                    Err(err) => {
+                        prime_error = Some(format!(
+                            "Failed to refresh action list for app '{app}': {err}"
+                        ));
                     }
                 }
             }
@@ -279,6 +253,7 @@ impl ComposioTool {
                 .execute_action_v3(
                     &slug,
                     params.clone(),
+                    text,
                     normalized_entity_id.as_deref(),
                     resolved_account_ref.as_deref(),
                 )
@@ -299,6 +274,17 @@ impl ComposioTool {
             .as_deref()
             .map(|msg| format!(" ({msg})"))
             .unwrap_or_default();
+
+        if text.is_some() {
+            anyhow::bail!(
+                "Composio v3 NLP execute failed on candidates ({v3_error_summary}){prime_suffix}{}",
+                build_connected_account_hint(
+                    app_hint.as_deref(),
+                    normalized_entity_id.as_deref(),
+                    resolved_account_ref.as_deref(),
+                )
+            );
+        }
 
         anyhow::bail!(
             "Composio execute failed on v3 ({v3_error_summary}){prime_suffix}{}",
