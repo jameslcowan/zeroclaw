@@ -23,6 +23,25 @@ Welcome — contributions of all sizes are valued. If this is your first contrib
 
 If you get stuck, open a draft PR early and ask questions in the description.
 
+## Development Workflow
+
+ZeroClaw uses a strict **issue → PR → dev → main** flow:
+
+1. **Open an issue** for every bug or feature (use the issue templates).
+2. **Branch off `dev`** — never commit directly to `dev` or `main`.
+   ```
+   git checkout dev && git pull origin dev
+   git checkout -b fix/<short-description>
+   ```
+3. **Implement your change**, run `cargo fmt && cargo clippy && cargo test --locked`.
+4. **Open a PR into `dev`** — include `Fixes #<issue_number>` in the PR description.
+   - At least **1 approver** required before merge (branch protection is enforced).
+   - All status checks (CI, CodeRabbit review) must pass.
+   - Resolve all review conversations before merging.
+5. **main is updated automatically** — a scheduled GitHub Actions workflow (`daily-merge.yml`) fast-forward merges `dev` into `main` every day at 2 AM UTC if all tests pass. No direct pushes to `main`.
+
+> **Direct pushes to `dev` or `main` are blocked.** All changes must flow through a reviewed PR.
+
 ## Development Setup
 
 ```bash
