@@ -10,7 +10,7 @@ body:
         Thanks for sharing your idea.
         Please focus on user value, constraints, and rollout safety.
         Do not include personal/sensitive data; use neutral project-scoped placeholders.
-
+        > **All implementations must be submitted as PRs referencing this issue** (e.g. `Fixes #123`). See [CONTRIBUTING.md](../blob/dev/CONTRIBUTING.md).
   - type: input
     id: summary
     attributes:
@@ -19,7 +19,6 @@ body:
       placeholder: Add a provider-level retry budget override for long-running channels.
     validations:
       required: true
-
   - type: textarea
     id: problem
     attributes:
@@ -28,7 +27,6 @@ body:
       placeholder: Teams operating in unstable networks cannot tune retries per provider...
     validations:
       required: true
-
   - type: textarea
     id: proposal
     attributes:
@@ -37,7 +35,6 @@ body:
       placeholder: Add `[provider.retry]` config and enforce bounds in config validation.
     validations:
       required: true
-
   - type: textarea
     id: non_goals
     attributes:
@@ -46,7 +43,6 @@ body:
       placeholder: No UI changes, no cross-provider dynamic adaptation in v1.
     validations:
       required: true
-
   - type: textarea
     id: alternatives
     attributes:
@@ -55,7 +51,6 @@ body:
       placeholder: Keep current behavior, use wrapper scripts, etc.
     validations:
       required: false
-
   - type: textarea
     id: acceptance
     attributes:
@@ -67,7 +62,6 @@ body:
         - Regression tests cover fallback and invalid config
     validations:
       required: true
-
   - type: textarea
     id: architecture
     attributes:
@@ -76,7 +70,6 @@ body:
       placeholder: providers/, channels/, memory/, runtime/, security/, docs/ ...
     validations:
       required: true
-
   - type: textarea
     id: risk
     attributes:
@@ -84,24 +77,11 @@ body:
       description: Main risk + how to disable/revert quickly.
       placeholder: Risk is ... rollback is ...
     validations:
-      required: true
-
-  - type: dropdown
-    id: breaking
-    attributes:
-      label: Breaking change?
-      options:
-        - "No"
-        - "Yes"
-    validations:
-      required: true
-
+      required: false
   - type: checkboxes
-    id: hygiene
+    id: pr_commitment
     attributes:
-      label: Data hygiene checks
+      label: Contribution Agreement
       options:
-        - label: I removed personal/sensitive data from examples, payloads, and logs.
-          required: true
-        - label: I used neutral, project-focused wording and placeholders.
+        - label: I understand that implementations must be submitted as a PR referencing this issue (e.g. `Fixes #<issue_number>`)
           required: true
