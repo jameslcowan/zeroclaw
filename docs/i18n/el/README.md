@@ -4,7 +4,7 @@
 
 Τελευταία ενημέρωση: **21 Φεβρουαρίου 2026**.
 
-Τοπικοποιημένα κέντρα: [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · [Français](README.fr.md) · [Tiếng Việt](i18n/vi/README.md).
+Τοπικοποιημένα κέντρα: [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · [Français](README.fr.md) · [Tiếng Việt](i18n/vi/README.md) · [Ελληνικά](README.md).
 
 ## Γρήγορη Εκκίνηση
 
@@ -61,7 +61,7 @@
 
 ### Συνεισφέροντες και Συντηρητές (Maintainers)
 
-- [../CONTRIBUTING.md](../CONTRIBUTING.md) — Οδηγός συνεισφοράς.
+- [../../../../CONTRIBUTING.el.md](../../../../CONTRIBUTING.el.md) — Οδηγός συνεισφοράς.
 - [pr-workflow.md](pr-workflow.md) — Διαδικασία υποβολής Pull Requests.
 - [reviewer-playbook.md](reviewer-playbook.md) — Οδηγός για αναθεωρητές κώδικα.
 - [ci-map.md](ci-map.md) — Διάγραμμα διαδικασιών CI.

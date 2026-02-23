@@ -4,7 +4,7 @@
 
 Τελευταία ενημέρωση: **21 Φεβρουαρίου 2026**.
 
-Τοπικοποιημένα κέντρα: [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · [Français](README.fr.md) · [Tiếng Việt](i18n/vi/README.md).
+Τοπικοποιημένα κέντρα: [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · [Français](README.fr.md) · [Tiếng Việt](i18n/vi/README.md) · [Ελληνικά](i18n/el/README.md).
 
 ## Ξεκινήστε από εδώ
 
@@ -63,7 +63,7 @@
 
 ### Συνεισφέροντες / Συντηρητές (Maintainers)
 
-- [../CONTRIBUTING.md](../CONTRIBUTING.md)
+- [../CONTRIBUTING.el.md](../CONTRIBUTING.el.md) — Οδηγός συνεισφοράς.
 - [pr-workflow.md](pr-workflow.md) — Ροή εργασιών PR
 - [reviewer-playbook.md](reviewer-playbook.md) — Εγχειρίδιο αναθεωρητή
 - [ci-map.md](ci-map.md) — Χάρτης CI

@@ -26,6 +26,7 @@ Use these i18n paths:
 | `ru` | `README.ru.md` | `docs/README.ru.md` | - | - | - | Hub-level localized |
 | `fr` | `README.fr.md` | `docs/README.fr.md` | - | - | - | Hub-level localized |
 | `vi` | `README.vi.md` | `docs/i18n/vi/README.md` | `docs/i18n/vi/commands-reference.md` | `docs/i18n/vi/config-reference.md` | `docs/i18n/vi/troubleshooting.md` | Full tree localized |
+| `el` | `README.el.md` | `docs/i18n/el/README.md` | `docs/i18n/el/commands-reference.md` | `docs/i18n/el/config-reference.md` | `docs/i18n/el/troubleshooting.md` | Full tree localized |
 
 ## Root README Completeness
 
@@ -39,6 +40,7 @@ Not all root READMEs are full translations of `README.md`:
 | `ru` | Hub-style entry point | ~26% |
 | `fr` | Near-complete translation | ~90% |
 | `vi` | Near-complete translation | ~90% |
+| `el` | Near-complete translation | ~90% |
 
 Hub-style entry points provide quick-start orientation and language navigation but do not replicate the full English README content. This is an accurate status record, not a gap to be immediately resolved.
 

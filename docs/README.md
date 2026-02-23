@@ -4,7 +4,7 @@ This page is the primary entry point for the documentation system.
 
 Last refreshed: **February 21, 2026**.
 
-Localized hubs: [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · [Français](README.fr.md) · [Tiếng Việt](i18n/vi/README.md).
+Localized hubs: [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · [Français](README.fr.md) · [Tiếng Việt](i18n/vi/README.md) · [Ελληνικά](i18n/el/README.md).
 
 ## Start Here
 
