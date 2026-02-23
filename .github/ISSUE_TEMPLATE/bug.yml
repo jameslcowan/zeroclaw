@@ -1,0 +1,53 @@
+name: Bug Report
+description: File a bug report
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **All fixes must be submitted as PRs referencing this issue.**
+        > Example PR description: `Fixes #123`. See [CONTRIBUTING.md](../blob/dev/CONTRIBUTING.md).
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of the bug.
+      placeholder: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Run `...`
+        2. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      placeholder: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Rust version, zeroclaw version, etc.
+      placeholder: |
+        - OS: Ubuntu 22.04
+        - Rust: 1.76
+        - zeroclaw: v0.x.x
+    validations:
+      required: false
+  - type: checkboxes
+    id: pr_commitment
+    attributes:
+      label: Contribution Agreement
+      options:
+        - label: I understand that fixes must be submitted as a PR referencing this issue (e.g. `Fixes #<issue_number>`)
+          required: true
