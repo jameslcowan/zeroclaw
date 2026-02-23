@@ -53,7 +53,7 @@ pub mod schedule;
 pub mod schema;
 pub mod screenshot;
 pub mod shell;
-pub mod task_plan;
+pub mod shell_status;
 pub mod traits;
 pub mod url_validation;
 pub mod web_fetch;
@@ -96,7 +96,7 @@ pub use schedule::ScheduleTool;
 pub use schema::{CleaningStrategy, SchemaCleanr};
 pub use screenshot::ScreenshotTool;
 pub use shell::ShellTool;
-pub use task_plan::TaskPlanTool;
+pub use traits::ErrorKind;
 pub use traits::Tool;
 #[allow(unused_imports)]
 pub use traits::{ToolResult, ToolSpec};
@@ -215,9 +215,14 @@ pub fn all_tools_with_runtime(
     fallback_api_key: Option<&str>,
     root_config: &crate::config::Config,
 ) -> Vec<Box<dyn Tool>> {
+    let bg_registry = Arc::new(shell::BackgroundTaskRegistry::default());
     let mut tool_arcs: Vec<Arc<dyn Tool>> = vec![
-        Arc::new(ShellTool::new(security.clone(), runtime.clone())),
-        Arc::new(ProcessTool::new(security.clone(), runtime)),
+        Arc::new(ShellTool::with_registry(
+            security.clone(),
+            runtime,
+            Arc::clone(&bg_registry),
+        )),
+        Arc::new(shell_status::ShellStatusTool::new(Arc::clone(&bg_registry))),
         Arc::new(FileReadTool::new(security.clone())),
         Arc::new(FileWriteTool::new(security.clone())),
         Arc::new(FileEditTool::new(security.clone())),
@@ -566,6 +571,7 @@ mod tests {
             success: true,
             output: "hello".into(),
             error: None,
+            error_kind: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         let parsed: ToolResult = serde_json::from_str(&json).unwrap();
@@ -580,6 +586,7 @@ mod tests {
             success: false,
             output: String::new(),
             error: Some("boom".into()),
+            error_kind: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         let parsed: ToolResult = serde_json::from_str(&json).unwrap();
