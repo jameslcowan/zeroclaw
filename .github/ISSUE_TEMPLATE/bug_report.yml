@@ -10,7 +10,7 @@ body:
         Thanks for taking the time to report a bug.
         Please provide a minimal reproducible case so maintainers can triage quickly.
         Do not include personal/sensitive data; redact and anonymize all logs/payloads.
-
+        > **All fixes must be submitted as PRs referencing this issue** (e.g. `Fixes #123`). See [CONTRIBUTING.md](../blob/dev/CONTRIBUTING.md).
   - type: input
     id: summary
     attributes:
@@ -19,7 +19,6 @@ body:
       placeholder: zeroclaw daemon exits immediately when ...
     validations:
       required: true
-
   - type: dropdown
     id: component
     attributes:
@@ -35,7 +34,6 @@ body:
         - unknown
     validations:
       required: true
-
   - type: dropdown
     id: severity
     attributes:
@@ -47,7 +45,6 @@ body:
         - S3 - minor issue
     validations:
       required: true
-
   - type: textarea
     id: current
     attributes:
@@ -56,7 +53,6 @@ body:
       placeholder: The process exits with ...
     validations:
       required: true
-
   - type: textarea
     id: expected
     attributes:
@@ -65,7 +61,6 @@ body:
       placeholder: The daemon should stay alive and ...
     validations:
       required: true
-
   - type: textarea
     id: reproduce
     attributes:
@@ -78,71 +73,10 @@ body:
       render: bash
     validations:
       required: true
-
-  - type: textarea
-    id: impact
-    attributes:
-      label: Impact
-      description: Who is affected, how often, and practical consequences.
-      placeholder: |
-        Affected users: ...
-        Frequency: always/intermittent
-        Consequence: ...
-    validations:
-      required: true
-
-  - type: textarea
-    id: logs
-    attributes:
-      label: Logs / stack traces
-      description: Paste relevant logs (redact secrets, personal identifiers, and sensitive data).
-      render: text
-    validations:
-      required: false
-
-  - type: input
-    id: version
-    attributes:
-      label: ZeroClaw version
-      placeholder: v0.1.0 / commit SHA
-    validations:
-      required: true
-
-  - type: input
-    id: rust
-    attributes:
-      label: Rust version
-      placeholder: rustc 1.xx.x
-    validations:
-      required: true
-
-  - type: input
-    id: os
-    attributes:
-      label: Operating system
-      placeholder: Ubuntu 24.04 / macOS 15 / Windows 11
-    validations:
-      required: true
-
-  - type: dropdown
-    id: regression
-    attributes:
-      label: Regression?
-      options:
-        - Unknown
-        - Yes, it worked before
-        - No, first-time setup
-    validations:
-      required: true
-
   - type: checkboxes
-    id: checks
+    id: pr_commitment
     attributes:
-      label: Pre-flight checks
+      label: Contribution Agreement
       options:
-        - label: I reproduced this on the latest main branch or latest release.
-          required: true
-        - label: I redacted secrets/tokens from logs.
-          required: true
-        - label: I removed personal identifiers and replaced identity-specific data with neutral placeholders.
+        - label: I understand that fixes must be submitted as a PR referencing this issue (e.g. `Fixes #<issue_number>`)
           required: true
