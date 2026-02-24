@@ -59,6 +59,30 @@ static RUNTIME_PROXY_CLIENT_CACHE: OnceLock<RwLock<HashMap<String, reqwest::Clie
 
 // ── Top-level config ──────────────────────────────────────────────
 
+/// Protocol mode for `custom:` OpenAI-compatible providers.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderApiMode {
+    /// Default behavior: `/chat/completions` first, optional `/responses`
+    /// fallback when supported.
+    OpenAiChatCompletions,
+    /// Responses-first behavior: call `/responses` directly.
+    OpenAiResponses,
+}
+
+impl ProviderApiMode {
+    pub fn as_compatible_mode(self) -> crate::providers::compatible::CompatibleApiMode {
+        match self {
+            Self::OpenAiChatCompletions => {
+                crate::providers::compatible::CompatibleApiMode::OpenAiChatCompletions
+            }
+            Self::OpenAiResponses => {
+                crate::providers::compatible::CompatibleApiMode::OpenAiResponses
+            }
+        }
+    }
+}
+
 /// Top-level ZeroClaw configuration, loaded from `config.toml`.
 ///
 /// Resolution order: `ZEROCLAW_WORKSPACE` env → `active_workspace.toml` marker → `~/.zeroclaw/config.toml`.
@@ -77,6 +101,9 @@ pub struct Config {
     /// Default provider ID or alias (e.g. `"openrouter"`, `"ollama"`, `"anthropic"`). Default: `"openrouter"`.
     #[serde(alias = "model_provider")]
     pub default_provider: Option<String>,
+    /// Optional API protocol mode for `custom:` providers.
+    #[serde(default)]
+    pub provider_api: Option<ProviderApiMode>,
     /// Default model routed through the selected provider (e.g. `"anthropic/claude-sonnet-4-6"`).
     #[serde(alias = "model")]
     pub default_model: Option<String>,
@@ -2321,6 +2348,10 @@ pub struct ModelRouteConfig {
     pub provider: String,
     /// Model to use with that provider
     pub model: String,
+    /// Optional max_tokens override for this route.
+    /// When set, provider requests cap output tokens to this value.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
     /// Optional API key override for this route's provider
     #[serde(default)]
     pub api_key: Option<String>,
@@ -2669,7 +2700,9 @@ impl ChannelsConfig {
             ),
             (
                 Box::new(ConfigWrapper::new(&self.qq)),
-                self.qq.is_some()
+                self.qq
+                    .as_ref()
+                    .is_some_and(|qq| qq.receive_mode == QQReceiveMode::Websocket)
             ),
             (
                 Box::new(ConfigWrapper::new(&self.nostr)),
@@ -3528,6 +3561,15 @@ impl ChannelConfig for DingTalkConfig {
 }
 
 /// QQ Official Bot configuration (Tencent QQ Bot SDK)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum QQReceiveMode {
+    Websocket,
+    #[default]
+    Webhook,
+}
+
+/// QQ Official Bot configuration (Tencent QQ Bot SDK)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct QQConfig {
     /// App ID from QQ Bot developer console
@@ -3537,6 +3579,9 @@ pub struct QQConfig {
     /// Allowed user IDs. Empty = deny all, "*" = allow all
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// Event receive mode: "webhook" (default) or "websocket".
+    #[serde(default)]
+    pub receive_mode: QQReceiveMode,
 }
 
 impl ChannelConfig for QQConfig {
@@ -3593,6 +3638,7 @@ impl Default for Config {
             api_key: None,
             api_url: None,
             default_provider: Some("openrouter".to_string()),
+            provider_api: None,
             default_model: Some("anthropic/claude-sonnet-4.6".to_string()),
             model_providers: HashMap::new(),
             default_temperature: 0.7,
@@ -4300,6 +4346,20 @@ impl Config {
             if route.model.trim().is_empty() {
                 anyhow::bail!("model_routes[{i}].model must not be empty");
             }
+            if route.max_tokens == Some(0) {
+                anyhow::bail!("model_routes[{i}].max_tokens must be greater than 0");
+            }
+        }
+
+        if self.provider_api.is_some()
+            && !self
+                .default_provider
+                .as_deref()
+                .is_some_and(|provider| provider.starts_with("custom:"))
+        {
+            anyhow::bail!(
+                "provider_api is only valid when default_provider uses the custom:<url> format"
+            );
         }
 
         // Embedding routes
@@ -5069,6 +5129,7 @@ default_temperature = 0.7
             api_key: Some("sk-test-key".into()),
             api_url: None,
             default_provider: Some("openrouter".into()),
+            provider_api: None,
             default_model: Some("gpt-4o".into()),
             model_providers: HashMap::new(),
             default_temperature: 0.5,
@@ -5307,6 +5368,7 @@ tool_dispatcher = "xml"
             api_key: Some("sk-roundtrip".into()),
             api_url: None,
             default_provider: Some("openrouter".into()),
+            provider_api: None,
             default_model: Some("test-model".into()),
             model_providers: HashMap::new(),
             default_temperature: 0.9,
@@ -6437,6 +6499,54 @@ requires_openai_auth = true
     }
 
     #[test]
+    async fn provider_api_requires_custom_default_provider() {
+        let mut config = Config::default();
+        config.default_provider = Some("openai".to_string());
+        config.provider_api = Some(ProviderApiMode::OpenAiResponses);
+
+        let err = config
+            .validate()
+            .expect_err("provider_api should be rejected for non-custom provider");
+        assert!(err.to_string().contains(
+            "provider_api is only valid when default_provider uses the custom:<url> format"
+        ));
+    }
+
+    #[test]
+    async fn provider_api_invalid_value_is_rejected() {
+        let toml = r#"
+default_provider = "custom:https://example.com/v1"
+default_model = "gpt-4o"
+default_temperature = 0.7
+provider_api = "not-a-real-mode"
+"#;
+        let parsed = toml::from_str::<Config>(toml);
+        assert!(
+            parsed.is_err(),
+            "invalid provider_api should fail to deserialize"
+        );
+    }
+
+    #[test]
+    async fn model_route_max_tokens_must_be_positive_when_set() {
+        let mut config = Config::default();
+        config.model_routes = vec![ModelRouteConfig {
+            hint: "reasoning".to_string(),
+            provider: "openrouter".to_string(),
+            model: "anthropic/claude-sonnet-4.6".to_string(),
+            max_tokens: Some(0),
+            api_key: None,
+        }];
+
+        let err = config
+            .validate()
+            .expect_err("model route max_tokens=0 should be rejected");
+        assert!(err
+            .to_string()
+            .contains("model_routes[0].max_tokens must be greater than 0"));
+    }
+
+    #[test]
     async fn env_override_glm_api_key_for_regional_aliases() {
         let _env_guard = env_override_lock().await;
         let mut config = Config {
@@ -7425,6 +7535,28 @@ default_model = "legacy-model"
         assert!(parsed.allowed_users.is_empty());
         assert_eq!(parsed.receive_mode, LarkReceiveMode::Websocket);
         assert!(parsed.port.is_none());
+    }
+
+    #[test]
+    async fn qq_config_defaults_to_webhook_receive_mode() {
+        let json = r#"{"app_id":"123","app_secret":"secret"}"#;
+        let parsed: QQConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.receive_mode, QQReceiveMode::Webhook);
+        assert!(parsed.allowed_users.is_empty());
+    }
+
+    #[test]
+    async fn qq_config_toml_roundtrip_receive_mode() {
+        let qc = QQConfig {
+            app_id: "123".into(),
+            app_secret: "secret".into(),
+            allowed_users: vec!["*".into()],
+            receive_mode: QQReceiveMode::Websocket,
+        };
+        let toml_str = toml::to_string(&qc).unwrap();
+        let parsed: QQConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.receive_mode, QQReceiveMode::Websocket);
+        assert_eq!(parsed.allowed_users, vec!["*"]);
     }
 
     #[test]

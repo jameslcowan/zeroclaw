@@ -1,6 +1,7 @@
 use crate::config::schema::{
     default_nostr_relays, DingTalkConfig, IrcConfig, LarkReceiveMode, LinqConfig,
-    NextcloudTalkConfig, NostrConfig, QQConfig, SignalConfig, StreamMode, WhatsAppConfig,
+    NextcloudTalkConfig, NostrConfig, QQConfig, QQReceiveMode, SignalConfig, StreamMode,
+    WhatsAppConfig,
 };
 use crate::config::{
     AutonomyConfig, BrowserConfig, ChannelsConfig, ComposioConfig, Config, DiscordConfig,
@@ -133,6 +134,7 @@ pub async fn run_wizard(force: bool) -> Result<Config> {
         },
         api_url: provider_api_url,
         default_provider: Some(provider),
+        provider_api: None,
         default_model: Some(model),
         model_providers: std::collections::HashMap::new(),
         default_temperature: 0.7,
@@ -484,6 +486,7 @@ async fn run_quick_setup_with_home(
         }),
         api_url: None,
         default_provider: Some(provider_name.clone()),
+        provider_api: None,
         default_model: Some(model.clone()),
         model_providers: std::collections::HashMap::new(),
         default_temperature: 0.7,
@@ -1172,7 +1175,8 @@ fn models_endpoint_for_provider(provider_name: &str) -> Option<&'static str> {
         "glm-cn" | "bigmodel" => Some("https://open.bigmodel.cn/api/paas/v4/models"),
         "zai-cn" | "z.ai-cn" => Some("https://open.bigmodel.cn/api/coding/paas/v4/models"),
         _ => match canonical_provider_name(provider_name) {
-            "openai-codex" | "openai" => Some("https://api.openai.com/v1/models"),
+            "openai-codex" => Some("https://api.openai.com/v1/models"),
+            "openai" => Some("https://api.openai.com/v1/models"),
             "venice" => Some("https://api.venice.ai/api/v1/models"),
             "groq" => Some("https://api.groq.com/openai/v1/models"),
             "mistral" => Some("https://api.mistral.ai/v1/models"),
@@ -2852,7 +2856,8 @@ fn provider_env_var(name: &str) -> &'static str {
     match canonical_provider_name(name) {
         "openrouter" => "OPENROUTER_API_KEY",
         "anthropic" => "ANTHROPIC_API_KEY",
-        "openai-codex" | "openai" => "OPENAI_API_KEY",
+        "openai-codex" => "OPENAI_API_KEY",
+        "openai" => "OPENAI_API_KEY",
         "ollama" => "OLLAMA_API_KEY",
         "llamacpp" => "LLAMACPP_API_KEY",
         "sglang" => "SGLANG_API_KEY",
@@ -4748,10 +4753,22 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     .filter(|s| !s.is_empty())
                     .collect();
 
+                let receive_mode_choice = Select::new()
+                    .with_prompt("  Receive mode")
+                    .items(["Webhook (recommended)", "WebSocket (legacy fallback)"])
+                    .default(0)
+                    .interact()?;
+                let receive_mode = if receive_mode_choice == 0 {
+                    QQReceiveMode::Webhook
+                } else {
+                    QQReceiveMode::Websocket
+                };
+
                 config.qq = Some(QQConfig {
                     app_id,
                     app_secret,
                     allowed_users,
+                    receive_mode,
                 });
             }
             ChannelMenuChoice::Lark | ChannelMenuChoice::Feishu => {
@@ -7173,6 +7190,7 @@ mod tests {
             app_id: "app-id".into(),
             app_secret: "app-secret".into(),
             allowed_users: vec!["*".into()],
+            receive_mode: crate::config::schema::QQReceiveMode::Websocket,
         });
         assert!(has_launchable_channels(&channels));
 

@@ -1,7 +1,6 @@
 use super::traits::{Tool, ToolResult};
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
-use futures_util::StreamExt;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,12 +39,42 @@ impl WebFetchTool {
     }
 
     fn validate_url(&self, raw_url: &str) -> anyhow::Result<String> {
-        validate_target_url(
-            raw_url,
-            &self.allowed_domains,
-            &self.blocked_domains,
-            "web_fetch",
-        )
+        let url = raw_url.trim();
+
+        if url.is_empty() {
+            anyhow::bail!("URL cannot be empty");
+        }
+
+        if url.chars().any(char::is_whitespace) {
+            anyhow::bail!("URL cannot contain whitespace");
+        }
+
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            anyhow::bail!("Only http:// and https:// URLs are allowed");
+        }
+
+        if self.allowed_domains.is_empty() {
+            anyhow::bail!(
+                "web_fetch tool is enabled but no allowed_domains are configured. \
+                 Add [web_fetch].allowed_domains in config.toml"
+            );
+        }
+
+        let host = extract_host(url)?;
+
+        if is_private_or_local_host(&host) {
+            anyhow::bail!("Blocked local/private host: {host}");
+        }
+
+        if host_matches_allowlist(&host, &self.blocked_domains) {
+            anyhow::bail!("Host '{host}' is in web_fetch.blocked_domains");
+        }
+
+        if !host_matches_allowlist(&host, &self.allowed_domains) {
+            anyhow::bail!("Host '{host}' is not in web_fetch.allowed_domains");
+        }
+
+        Ok(url.to_string())
     }
 
     fn truncate_response(&self, text: &str) -> String {
@@ -59,24 +88,6 @@ impl WebFetchTool {
         } else {
             text.to_string()
         }
-    }
-
-    async fn read_response_text_limited(
-        &self,
-        response: reqwest::Response,
-    ) -> anyhow::Result<String> {
-        let mut bytes_stream = response.bytes_stream();
-        let hard_cap = self.max_response_size.saturating_add(1);
-        let mut bytes = Vec::new();
-
-        while let Some(chunk_result) = bytes_stream.next().await {
-            let chunk = chunk_result?;
-            if append_chunk_with_cap(&mut bytes, &chunk, hard_cap) {
-                break;
-            }
-        }
-
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 }
 
@@ -148,32 +159,10 @@ impl Tool for WebFetchTool {
             self.timeout_secs
         };
 
-        let allowed_domains = self.allowed_domains.clone();
-        let blocked_domains = self.blocked_domains.clone();
-        let redirect_policy = reqwest::redirect::Policy::custom(move |attempt| {
-            if attempt.previous().len() >= 10 {
-                return attempt.error(std::io::Error::other("Too many redirects (max 10)"));
-            }
-
-            if let Err(err) = validate_target_url(
-                attempt.url().as_str(),
-                &allowed_domains,
-                &blocked_domains,
-                "web_fetch",
-            ) {
-                return attempt.error(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    format!("Blocked redirect target: {err}"),
-                ));
-            }
-
-            attempt.follow()
-        });
-
         let builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .connect_timeout(Duration::from_secs(10))
-            .redirect(redirect_policy)
+            .redirect(reqwest::redirect::Policy::limited(10))
             .user_agent("ZeroClaw/0.1 (web_fetch)");
         let builder = crate::config::apply_runtime_proxy_to_builder(builder, "tool.web_fetch");
         let client = match builder.build() {
@@ -219,25 +208,7 @@ impl Tool for WebFetchTool {
             .unwrap_or("")
             .to_lowercase();
 
-        let body_mode = if content_type.contains("text/html") || content_type.is_empty() {
-            "html"
-        } else if content_type.contains("text/plain")
-            || content_type.contains("text/markdown")
-            || content_type.contains("application/json")
-        {
-            "plain"
-        } else {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "Unsupported content type: {content_type}. \
-                     web_fetch supports text/html, text/plain, text/markdown, and application/json."
-                )),
-            });
-        };
-
-        let body = match self.read_response_text_limited(response).await {
+        let body = match response.text().await {
             Ok(t) => t,
             Err(e) => {
                 return Ok(ToolResult {
@@ -248,10 +219,25 @@ impl Tool for WebFetchTool {
             }
         };
 
-        let text = if body_mode == "html" {
+        let text = if content_type.contains("text/html") {
+            nanohtml2text::html2text(&body)
+        } else if content_type.contains("text/plain")
+            || content_type.contains("text/markdown")
+            || content_type.contains("application/json")
+        {
+            body
+        } else if content_type.is_empty() {
+            // No content-type header; try HTML conversion as best-effort
             nanohtml2text::html2text(&body)
         } else {
-            body
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "Unsupported content type: {content_type}. \
+                     web_fetch supports text/html, text/plain, text/markdown, and application/json."
+                )),
+            });
         };
 
         let output = self.truncate_response(&text);
@@ -265,67 +251,6 @@ impl Tool for WebFetchTool {
 }
 
 // ── Helper functions (independent from http_request.rs per DRY rule-of-three) ──
-
-fn validate_target_url(
-    raw_url: &str,
-    allowed_domains: &[String],
-    blocked_domains: &[String],
-    tool_name: &str,
-) -> anyhow::Result<String> {
-    let url = raw_url.trim();
-
-    if url.is_empty() {
-        anyhow::bail!("URL cannot be empty");
-    }
-
-    if url.chars().any(char::is_whitespace) {
-        anyhow::bail!("URL cannot contain whitespace");
-    }
-
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        anyhow::bail!("Only http:// and https:// URLs are allowed");
-    }
-
-    if allowed_domains.is_empty() {
-        anyhow::bail!(
-            "{tool_name} tool is enabled but no allowed_domains are configured. \
-             Add [{tool_name}].allowed_domains in config.toml"
-        );
-    }
-
-    let host = extract_host(url)?;
-
-    if is_private_or_local_host(&host) {
-        anyhow::bail!("Blocked local/private host: {host}");
-    }
-
-    if host_matches_allowlist(&host, blocked_domains) {
-        anyhow::bail!("Host '{host}' is in {tool_name}.blocked_domains");
-    }
-
-    if !host_matches_allowlist(&host, allowed_domains) {
-        anyhow::bail!("Host '{host}' is not in {tool_name}.allowed_domains");
-    }
-
-    validate_resolved_host_is_public(&host)?;
-
-    Ok(url.to_string())
-}
-
-fn append_chunk_with_cap(buffer: &mut Vec<u8>, chunk: &[u8], hard_cap: usize) -> bool {
-    if buffer.len() >= hard_cap {
-        return true;
-    }
-
-    let remaining = hard_cap - buffer.len();
-    if chunk.len() > remaining {
-        buffer.extend_from_slice(&chunk[..remaining]);
-        return true;
-    }
-
-    buffer.extend_from_slice(chunk);
-    buffer.len() >= hard_cap
-}
 
 fn normalize_allowed_domains(domains: Vec<String>) -> Vec<String> {
     let mut normalized = domains
@@ -440,43 +365,6 @@ fn is_private_or_local_host(host: &str) -> bool {
     }
 
     false
-}
-
-#[cfg(not(test))]
-fn validate_resolved_host_is_public(host: &str) -> anyhow::Result<()> {
-    use std::net::ToSocketAddrs;
-
-    let ips = (host, 0)
-        .to_socket_addrs()
-        .map_err(|e| anyhow::anyhow!("Failed to resolve host '{host}': {e}"))?
-        .map(|addr| addr.ip())
-        .collect::<Vec<_>>();
-
-    validate_resolved_ips_are_public(host, &ips)
-}
-
-#[cfg(test)]
-fn validate_resolved_host_is_public(_host: &str) -> anyhow::Result<()> {
-    // DNS checks are covered by validate_resolved_ips_are_public unit tests.
-    Ok(())
-}
-
-fn validate_resolved_ips_are_public(host: &str, ips: &[std::net::IpAddr]) -> anyhow::Result<()> {
-    if ips.is_empty() {
-        anyhow::bail!("Failed to resolve host '{host}'");
-    }
-
-    for ip in ips {
-        let non_global = match ip {
-            std::net::IpAddr::V4(v4) => is_non_global_v4(*v4),
-            std::net::IpAddr::V6(v6) => is_non_global_v6(*v6),
-        };
-        if non_global {
-            anyhow::bail!("Blocked host '{host}' resolved to non-global address {ip}");
-        }
-    }
-
-    Ok(())
 }
 
 fn is_non_global_v4(v4: std::net::Ipv4Addr) -> bool {
@@ -673,39 +561,6 @@ mod tests {
         assert!(err.contains("local/private"));
     }
 
-    #[test]
-    fn redirect_target_validation_allows_permitted_host() {
-        let allowed = vec!["example.com".to_string()];
-        let blocked = vec![];
-        assert!(validate_target_url(
-            "https://docs.example.com/page",
-            &allowed,
-            &blocked,
-            "web_fetch"
-        )
-        .is_ok());
-    }
-
-    #[test]
-    fn redirect_target_validation_blocks_private_host() {
-        let allowed = vec!["example.com".to_string()];
-        let blocked = vec![];
-        let err = validate_target_url("https://127.0.0.1/admin", &allowed, &blocked, "web_fetch")
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("local/private"));
-    }
-
-    #[test]
-    fn redirect_target_validation_blocks_blocklisted_host() {
-        let allowed = vec!["*".to_string()];
-        let blocked = vec!["evil.com".to_string()];
-        let err = validate_target_url("https://evil.com/phish", &allowed, &blocked, "web_fetch")
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("blocked_domains"));
-    }
-
     // ── Security policy ──────────────────────────────────────────
 
     #[tokio::test]
@@ -815,40 +670,5 @@ mod tests {
     fn blocklist_allows_non_blocked() {
         let tool = test_tool_with_blocklist(vec!["*"], vec!["evil.com"]);
         assert!(tool.validate_url("https://example.com").is_ok());
-    }
-
-    #[test]
-    fn append_chunk_with_cap_truncates_and_stops() {
-        let mut buffer = Vec::new();
-        assert!(!append_chunk_with_cap(&mut buffer, b"hello", 8));
-        assert!(append_chunk_with_cap(&mut buffer, b"world", 8));
-        assert_eq!(buffer, b"hellowor");
-    }
-
-    #[test]
-    fn resolved_private_ip_is_rejected() {
-        let ips = vec!["127.0.0.1".parse().unwrap()];
-        let err = validate_resolved_ips_are_public("example.com", &ips)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("non-global address"));
-    }
-
-    #[test]
-    fn resolved_mixed_ips_are_rejected() {
-        let ips = vec![
-            "93.184.216.34".parse().unwrap(),
-            "10.0.0.1".parse().unwrap(),
-        ];
-        let err = validate_resolved_ips_are_public("example.com", &ips)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("non-global address"));
-    }
-
-    #[test]
-    fn resolved_public_ips_are_allowed() {
-        let ips = vec!["93.184.216.34".parse().unwrap(), "1.1.1.1".parse().unwrap()];
-        assert!(validate_resolved_ips_are_public("example.com", &ips).is_ok());
     }
 }

@@ -1527,14 +1527,7 @@ fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) {
 
             // Try to parse the inner content as JSON arguments
             let json_values = extract_json_values(inner);
-            if json_values.is_empty() {
-                // Log a warning if we found a tool block but couldn't parse arguments
-                tracing::warn!(
-                    tool_name = %tool_name,
-                    inner = %inner.chars().take(100).collect::<String>(),
-                    "Found ```tool <name> block but could not parse JSON arguments"
-                );
-            } else {
+            if !json_values.is_empty() {
                 for value in json_values {
                     let arguments = if value.is_object() {
                         value
@@ -1547,6 +1540,13 @@ fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) {
                         tool_call_id: None,
                     });
                 }
+            } else {
+                // Log a warning if we found a tool block but couldn't parse arguments
+                tracing::warn!(
+                    tool_name = %tool_name,
+                    inner = %inner.chars().take(100).collect::<String>(),
+                    "Found ```tool <name> block but could not parse JSON arguments"
+                );
             }
             last_end = full_match.end();
         }
@@ -2808,6 +2808,8 @@ pub async fn run(
         zeroclaw_dir: config.config_path.parent().map(std::path::PathBuf::from),
         secrets_encrypt: config.secrets.encrypt,
         reasoning_enabled: config.runtime.reasoning_enabled,
+        custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
+        max_tokens_override: None,
     };
 
     let provider: Box<dyn Provider> = providers::create_routed_provider_with_options(
@@ -3266,6 +3268,8 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         zeroclaw_dir: config.config_path.parent().map(std::path::PathBuf::from),
         secrets_encrypt: config.secrets.encrypt,
         reasoning_enabled: config.runtime.reasoning_enabled,
+        custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
+        max_tokens_override: None,
     };
     let provider: Box<dyn Provider> = providers::create_routed_provider_with_options(
         provider_name,
