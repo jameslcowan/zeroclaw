@@ -173,6 +173,10 @@ pub(crate) fn is_doubao_alias(name: &str) -> bool {
     matches!(name, "doubao" | "volcengine" | "ark" | "doubao-cn")
 }
 
+pub(crate) fn is_hunyuan_alias(name: &str) -> bool {
+    matches!(name, "hunyuan" | "tencent")
+}
+
 #[derive(Clone, Copy, Debug)]
 enum MinimaxOauthRegion {
     Global,
@@ -612,6 +616,8 @@ pub(crate) fn canonical_china_provider_name(name: &str) -> Option<&'static str> 
         Some("qianfan")
     } else if is_doubao_alias(name) {
         Some("doubao")
+    } else if is_hunyuan_alias(name) {
+        Some("hunyuan")
     } else {
         None
     }
@@ -838,6 +844,7 @@ fn resolve_provider_credential(name: &str, credential_override: Option<&str>) ->
         "bedrock" | "aws-bedrock" => return None,
         name if is_qianfan_alias(name) => vec!["QIANFAN_API_KEY"],
         name if is_doubao_alias(name) => vec!["ARK_API_KEY", "DOUBAO_API_KEY"],
+        name if is_hunyuan_alias(name) => vec!["HUNYUAN_API_KEY"],
         name if is_qwen_alias(name) => vec!["DASHSCOPE_API_KEY"],
         name if is_zai_alias(name) => vec!["ZAI_API_KEY"],
         "nvidia" | "nvidia-nim" | "build.nvidia.com" => vec!["NVIDIA_API_KEY"],
@@ -1091,6 +1098,12 @@ fn create_provider_with_url_and_options(
         name if is_doubao_alias(name) => Ok(Box::new(OpenAiCompatibleProvider::new(
             "Doubao",
             "https://ark.cn-beijing.volces.com/api/v3",
+            key,
+            AuthStyle::Bearer,
+        ))),
+        name if is_hunyuan_alias(name) => Ok(Box::new(OpenAiCompatibleProvider::new(
+            "Hunyuan",
+            "https://api.hunyuan.cloud.tencent.com/v1",
             key,
             AuthStyle::Bearer,
         ))),
@@ -1610,6 +1623,12 @@ pub fn list_providers() -> Vec<ProviderInfo> {
             local: false,
         },
         ProviderInfo {
+            name: "hunyuan",
+            display_name: "Hunyuan (Tencent)",
+            aliases: &["tencent"],
+            local: false,
+        },
+        ProviderInfo {
             name: "qwen",
             display_name: "Qwen (DashScope / Qwen Code OAuth)",
             aliases: &[
@@ -1933,12 +1952,16 @@ mod tests {
         assert!(is_doubao_alias("ark"));
         assert!(is_doubao_alias("doubao-cn"));
 
+        assert!(is_hunyuan_alias("hunyuan"));
+        assert!(is_hunyuan_alias("tencent"));
+
         assert!(!is_moonshot_alias("openrouter"));
         assert!(!is_glm_alias("openai"));
         assert!(!is_qwen_alias("gemini"));
         assert!(!is_zai_alias("anthropic"));
         assert!(!is_qianfan_alias("cohere"));
         assert!(!is_doubao_alias("deepseek"));
+        assert!(!is_hunyuan_alias("openai"));
     }
 
     #[test]
@@ -1958,6 +1981,8 @@ mod tests {
         assert_eq!(canonical_china_provider_name("baidu"), Some("qianfan"));
         assert_eq!(canonical_china_provider_name("doubao"), Some("doubao"));
         assert_eq!(canonical_china_provider_name("volcengine"), Some("doubao"));
+        assert_eq!(canonical_china_provider_name("hunyuan"), Some("hunyuan"));
+        assert_eq!(canonical_china_provider_name("tencent"), Some("hunyuan"));
         assert_eq!(canonical_china_provider_name("openai"), None);
     }
 
@@ -2161,6 +2186,12 @@ mod tests {
         assert!(create_provider("volcengine", Some("key")).is_ok());
         assert!(create_provider("ark", Some("key")).is_ok());
         assert!(create_provider("doubao-cn", Some("key")).is_ok());
+    }
+
+    #[test]
+    fn factory_hunyuan() {
+        assert!(create_provider("hunyuan", Some("key")).is_ok());
+        assert!(create_provider("tencent", Some("key")).is_ok());
     }
 
     #[test]

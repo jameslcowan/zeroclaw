@@ -690,6 +690,7 @@ fn default_model_for_provider(provider: &str) -> String {
         "minimax" => "MiniMax-M2.5".into(),
         "qwen" => "qwen-plus".into(),
         "qwen-code" => "qwen3-coder-plus".into(),
+        "hunyuan" | "tencent" => "hunyuan-t1-latest".into(),
         "ollama" => "llama3.2".into(),
         "llamacpp" => "ggml-org/gpt-oss-20b-GGUF".into(),
         "sglang" | "vllm" | "osaurus" => "default".into(),
@@ -979,6 +980,20 @@ fn curated_models_for_provider(provider_name: &str) -> Vec<(String, String)> {
             (
                 "qwen3-max-2026-01-23".to_string(),
                 "Qwen3 Max (high-capability coding model)".to_string(),
+            ),
+        ],
+        "hunyuan" | "tencent" => vec![
+            (
+                "hunyuan-t1-latest".to_string(),
+                "Hunyuan T1 Latest (deep thinking, recommended)".to_string(),
+            ),
+            (
+                "hunyuan-turbo-latest".to_string(),
+                "Hunyuan Turbo Latest (fast, cost-efficient)".to_string(),
+            ),
+            (
+                "hunyuan-pro".to_string(),
+                "Hunyuan Pro (balanced quality)".to_string(),
             ),
         ],
         "nvidia" => vec![
@@ -2136,6 +2151,8 @@ async fn setup_provider(workspace_dir: &Path) -> Result<(String, String, String,
             ("qianfan", "Qianfan — Baidu AI models (China endpoint)"),
             ("zai", "Z.AI — global coding endpoint"),
             ("zai-cn", "Z.AI — China coding endpoint (open.bigmodel.cn)"),
+            ("hunyuan", "Hunyuan — Tencent AI models (Tencent Cloud)"),
+            ("tencent", "Tencent — alias for Hunyuan"),
             ("synthetic", "Synthetic — Synthetic AI models"),
             ("opencode", "OpenCode Zen — code-focused AI"),
             ("cohere", "Cohere — Command R+ & embeddings"),

@@ -322,7 +322,7 @@ impl MatrixChannel {
         match event.content.relates_to.as_ref()? {
             Relation::Reply { in_reply_to } => Some(in_reply_to.event_id.to_string()),
             Relation::Thread(thread) => thread.in_reply_to.as_ref().map(|r| r.event_id.to_string()),
-            Relation::Replacement(_) | Relation::_Custom(_) => None,
+            Relation::Replacement(_) | Relation::_Custom(_) | _ => None,
         }
     }
 
@@ -767,8 +767,12 @@ impl Channel for MatrixChannel {
                     return;
                 }
 
+                // These are only used when mention_only mode is enabled
+                #[allow(unused_assignments)]
                 let mut is_direct_room = false;
+                #[allow(unused_assignments)]
                 let mut is_mentioned = false;
+                #[allow(unused_assignments)]
                 let mut is_reply_to_bot = false;
 
                 if mention_only_for_handler {
