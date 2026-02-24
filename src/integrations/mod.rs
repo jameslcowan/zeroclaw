@@ -15,7 +15,7 @@ pub enum IntegrationStatus {
 }
 
 /// Integration category
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub enum IntegrationCategory {
     Chat,
     AiModel,
@@ -69,6 +69,14 @@ pub struct IntegrationEntry {
 /// Handle the `integrations` CLI command
 pub fn handle_command(command: crate::IntegrationCommands, config: &Config) -> Result<()> {
     match command {
+        crate::IntegrationCommands::List { category, status } => {
+            list_integrations(config, category.as_deref(), status.as_deref())
+        }
+        crate::IntegrationCommands::Search {
+            query,
+            category,
+            status,
+        } => search_integrations(config, &query, category.as_deref(), status.as_deref()),
         crate::IntegrationCommands::Info { name } => show_integration_info(config, &name),
     }
 }
@@ -172,6 +180,227 @@ fn show_integration_info(config: &Config, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Get status icon and label
+fn status_icon(status: IntegrationStatus) -> (&'static str, &'static str) {
+    match status {
+        IntegrationStatus::Active => ("✅", "Active"),
+        IntegrationStatus::Available => ("⚪", "Available"),
+        IntegrationStatus::ComingSoon => ("🔜", "Coming Soon"),
+    }
+}
+
+/// Parse category filter from string, supporting aliases
+fn parse_category_filter(input: &str) -> Result<IntegrationCategory> {
+    let normalized = input.to_lowercase().replace('-', "").replace('_', "");
+
+    match normalized.as_str() {
+        "chat" | "chatproviders" | "messaging" => Ok(IntegrationCategory::Chat),
+        "ai" | "aimodels" | "aimodel" | "models" | "llm" | "llms" => Ok(IntegrationCategory::AiModel),
+        "productivity" | "prod" => Ok(IntegrationCategory::Productivity),
+        "music" | "musicaudio" | "audio" => Ok(IntegrationCategory::MusicAudio),
+        "smarthome" | "home" | "iot" => Ok(IntegrationCategory::SmartHome),
+        "tools" | "toolsautomation" | "automation" => Ok(IntegrationCategory::ToolsAutomation),
+        "media" | "mediacreative" | "creative" => Ok(IntegrationCategory::MediaCreative),
+        "social" => Ok(IntegrationCategory::Social),
+        "platforms" | "platform" => Ok(IntegrationCategory::Platform),
+        _ => {
+            let valid = [
+                "chat", "ai", "productivity", "music", "smart-home",
+                "tools", "media", "social", "platforms",
+            ];
+            anyhow::bail!(
+                "Unknown category: '{}'. Valid options: {}",
+                input,
+                valid.join(", ")
+            );
+        }
+    }
+}
+
+/// Parse status filter from string
+fn parse_status_filter(input: &str) -> Result<IntegrationStatus> {
+    let normalized = input.to_lowercase().replace('-', "").replace('_', "");
+
+    match normalized.as_str() {
+        "active" | "enabled" | "on" => Ok(IntegrationStatus::Active),
+        "available" | "ready" | "off" => Ok(IntegrationStatus::Available),
+        "comingsoon" | "soon" | "planned" | "todo" => Ok(IntegrationStatus::ComingSoon),
+        _ => {
+            anyhow::bail!(
+                "Unknown status: '{}'. Valid options: active, available, coming-soon",
+                input
+            );
+        }
+    }
+}
+
+/// List all integrations grouped by category
+fn list_integrations(
+    config: &Config,
+    category_filter: Option<&str>,
+    status_filter: Option<&str>,
+) -> Result<()> {
+    let entries = registry::all_integrations();
+
+    // Parse filters
+    let category_match = category_filter
+        .map(|c| parse_category_filter(c))
+        .transpose()?;
+    let status_match = status_filter
+        .map(|s| parse_status_filter(s))
+        .transpose()?;
+
+    // Group entries by category
+    let mut categories: std::collections::BTreeMap<IntegrationCategory, Vec<&IntegrationEntry>> =
+        std::collections::BTreeMap::new();
+
+    for entry in &entries {
+        // Apply category filter
+        if let Some(ref cat) = category_match {
+            if entry.category != *cat {
+                continue;
+            }
+        }
+
+        // Apply status filter
+        if let Some(ref status) = status_match {
+            let entry_status = (entry.status_fn)(config);
+            if entry_status != *status {
+                continue;
+            }
+        }
+
+        categories.entry(entry.category).or_default().push(entry);
+    }
+
+    println!();
+    println!("{}", console::style("ZeroClaw Integrations").white().bold());
+    println!();
+
+    if categories.is_empty() {
+        println!("  No integrations match the specified filters.");
+        println!();
+        return Ok(());
+    }
+
+    for (category, cat_entries) in categories {
+        println!(
+            "  {}",
+            console::style(category.label()).cyan().bold()
+        );
+
+        for entry in cat_entries {
+            let status = (entry.status_fn)(config);
+            let (icon, _) = status_icon(status);
+            println!(
+                "    {} {} — {}",
+                icon,
+                console::style(entry.name).white(),
+                console::style(entry.description).dim()
+            );
+        }
+        println!();
+    }
+
+    // Print legend
+    println!("  Legend:");
+    println!("    ✅ Active (configured)");
+    println!("    ⚪ Available");
+    println!("    🔜 Coming Soon");
+    println!();
+    println!("  Run `zeroclaw integrations info <name>` for setup details.");
+    println!();
+
+    Ok(())
+}
+
+/// Search integrations by query
+fn search_integrations(
+    config: &Config,
+    query: &str,
+    category_filter: Option<&str>,
+    status_filter: Option<&str>,
+) -> Result<()> {
+    let entries = registry::all_integrations();
+    let query_lower = query.to_lowercase();
+
+    // Parse filters
+    let category_match = category_filter
+        .map(|c| parse_category_filter(c))
+        .transpose()?;
+    let status_match = status_filter
+        .map(|s| parse_status_filter(s))
+        .transpose()?;
+
+    let mut results: Vec<&IntegrationEntry> = entries
+        .iter()
+        .filter(|entry| {
+            // Check query match (name or description)
+            let matches_query = entry.name.to_lowercase().contains(&query_lower)
+                || entry.description.to_lowercase().contains(&query_lower);
+
+            if !matches_query {
+                return false;
+            }
+
+            // Apply category filter
+            if let Some(ref cat) = category_match {
+                if entry.category != *cat {
+                    return false;
+                }
+            }
+
+            // Apply status filter
+            if let Some(ref status) = status_match {
+                let entry_status = (entry.status_fn)(config);
+                if entry_status != *status {
+                    return false;
+                }
+            }
+
+            true
+        })
+        .collect();
+
+    println!();
+    println!(
+        "{}",
+        console::style(format!("Search results for '{}'", query))
+            .white()
+            .bold()
+    );
+    println!();
+
+    if results.is_empty() {
+        println!("  No integrations found matching your query.");
+        println!();
+        println!("  Try a different search term or run `zeroclaw integrations list` to see all options.");
+        println!();
+        return Ok(());
+    }
+
+    // Sort by name for consistent output
+    results.sort_by_key(|e| e.name);
+
+    for entry in results {
+        let status = (entry.status_fn)(config);
+        let (icon, _) = status_icon(status);
+        println!(
+            "  {} {} — {} [{}]",
+            icon,
+            console::style(entry.name).white(),
+            console::style(entry.description).dim(),
+            console::style(entry.category.label()).cyan()
+        );
+    }
+
+    println!();
+    println!("  Run `zeroclaw integrations info <name>` for setup details.");
+    println!();
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +452,150 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Unknown integration"));
+    }
+
+    #[test]
+    fn handle_command_list_returns_ok() {
+        let config = Config::default();
+        let result = handle_command(
+            crate::IntegrationCommands::List {
+                category: None,
+                status: None,
+            },
+            &config,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn handle_command_list_with_category_filter() {
+        let config = Config::default();
+        let result = handle_command(
+            crate::IntegrationCommands::List {
+                category: Some("chat".into()),
+                status: None,
+            },
+            &config,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn handle_command_list_with_invalid_category() {
+        let config = Config::default();
+        let result = handle_command(
+            crate::IntegrationCommands::List {
+                category: Some("invalid-category".into()),
+                status: None,
+            },
+            &config,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Unknown category"));
+    }
+
+    #[test]
+    fn handle_command_list_with_status_filter() {
+        let config = Config::default();
+        let result = handle_command(
+            crate::IntegrationCommands::List {
+                category: None,
+                status: Some("available".into()),
+            },
+            &config,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn handle_command_list_with_invalid_status() {
+        let config = Config::default();
+        let result = handle_command(
+            crate::IntegrationCommands::List {
+                category: None,
+                status: Some("invalid-status".into()),
+            },
+            &config,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Unknown status"));
+    }
+
+    #[test]
+    fn handle_command_search_returns_ok() {
+        let config = Config::default();
+        let result = handle_command(
+            crate::IntegrationCommands::Search {
+                query: "telegram".into(),
+                category: None,
+                status: None,
+            },
+            &config,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn handle_command_search_no_results_is_ok() {
+        let config = Config::default();
+        let result = handle_command(
+            crate::IntegrationCommands::Search {
+                query: "xyznonexistent123".into(),
+                category: None,
+                status: None,
+            },
+            &config,
+        );
+        assert!(result.is_ok()); // No results is not an error
+    }
+
+    #[test]
+    fn parse_category_filter_handles_aliases() {
+        assert!(matches!(
+            parse_category_filter("ai"),
+            Ok(IntegrationCategory::AiModel)
+        ));
+        assert!(matches!(
+            parse_category_filter("AI"),
+            Ok(IntegrationCategory::AiModel)
+        ));
+        assert!(matches!(
+            parse_category_filter("models"),
+            Ok(IntegrationCategory::AiModel)
+        ));
+        assert!(matches!(
+            parse_category_filter("smart-home"),
+            Ok(IntegrationCategory::SmartHome)
+        ));
+        assert!(matches!(
+            parse_category_filter("smarthome"),
+            Ok(IntegrationCategory::SmartHome)
+        ));
+    }
+
+    #[test]
+    fn parse_status_filter_handles_aliases() {
+        assert!(matches!(
+            parse_status_filter("active"),
+            Ok(IntegrationStatus::Active)
+        ));
+        assert!(matches!(
+            parse_status_filter("enabled"),
+            Ok(IntegrationStatus::Active)
+        ));
+        assert!(matches!(
+            parse_status_filter("available"),
+            Ok(IntegrationStatus::Available)
+        ));
+        assert!(matches!(
+            parse_status_filter("coming-soon"),
+            Ok(IntegrationStatus::ComingSoon)
+        ));
+        assert!(matches!(
+            parse_status_filter("soon"),
+            Ok(IntegrationStatus::ComingSoon)
+        ));
     }
 }

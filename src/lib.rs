@@ -332,6 +332,26 @@ pub enum MemoryCommands {
 /// Integration subcommands
 #[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IntegrationCommands {
+    /// List all integrations grouped by category
+    List {
+        /// Filter by category (chat, ai, productivity, music, smart-home, tools, media, social, platforms)
+        #[arg(long)]
+        category: Option<String>,
+        /// Filter by status (active, available, coming-soon)
+        #[arg(long)]
+        status: Option<String>,
+    },
+    /// Search integrations by name or description
+    Search {
+        /// Search query (matches name or description, case-insensitive)
+        query: String,
+        /// Filter by category
+        #[arg(long)]
+        category: Option<String>,
+        /// Filter by status
+        #[arg(long)]
+        status: Option<String>,
+    },
     /// Show details about a specific integration
     Info {
         /// Integration name
