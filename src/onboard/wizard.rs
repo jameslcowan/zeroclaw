@@ -4010,6 +4010,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     device_id: detected_device_id,
                     room_id,
                     allowed_users,
+                    mention_only: false,
                 });
             }
             ChannelMenuChoice::Signal => {
