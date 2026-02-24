@@ -1,0 +1,33 @@
+# ZeroClaw ドキュメントハブ（日本語）
+
+このファイルは `docs/i18n/<locale>/` 構造における日本語ハブです。
+
+最終同期日: **2026-02-24**。
+
+> 注: コマンド名・設定キー・API パスは英語のまま記載します。
+
+## クイックリンク
+
+- 日本語ルート README: [../../../README.ja.md](../../../README.ja.md)
+- 日本語ドキュメント入口（互換）: [../../README.ja.md](../../README.ja.md)
+- 日本語目次（互換）: [../../SUMMARY.ja.md](../../SUMMARY.ja.md)
+- 英語ドキュメント入口: [../../README.md](../../README.md)
+
+## カテゴリ
+
+- はじめに: [../../getting-started/README.md](../../getting-started/README.md)
+- リファレンス: [../../reference/README.md](../../reference/README.md)
+- 運用とデプロイ: [../../operations/README.md](../../operations/README.md)
+- セキュリティ: [../../security/README.md](../../security/README.md)
+- ハードウェア: [../../hardware/README.md](../../hardware/README.md)
+- コントリビュート / CI: [../../contributing/README.md](../../contributing/README.md)
+- 統合 TOC: [SUMMARY.md](SUMMARY.md)
+
+## 他言語
+
+- English: [../../README.md](../../README.md)
+- 简体中文: [../zh-CN/README.md](../zh-CN/README.md)
+- Русский: [../ru/README.md](../ru/README.md)
+- Français: [../fr/README.md](../fr/README.md)
+- Tiếng Việt: [../vi/README.md](../vi/README.md)
+- Ελληνικά: [../el/README.md](../el/README.md)

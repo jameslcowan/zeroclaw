@@ -4,7 +4,7 @@
 
 Τελευταία ενημέρωση: **21 Φεβρουαρίου 2026**.
 
-Τοπικοποιημένα κέντρα: [简体中文](../../README.zh-CN.md) · [日本語](../../README.ja.md) · [Русский](../../README.ru.md) · [Français](../../README.fr.md) · [Tiếng Việt](../vi/README.md) · [Ελληνικά](README.md).
+Τοπικοποιημένα κέντρα: [简体中文](../zh-CN/README.md) · [日本語](../ja/README.md) · [Русский](../ru/README.md) · [Français](../fr/README.md) · [Tiếng Việt](../vi/README.md) · [Ελληνικά](README.md).
 
 ## Γρήγορη Εκκίνηση
 
@@ -86,3 +86,12 @@
 - Ευρετήριο μεταφράσεων i18n: [../README.md](../README.md)
 - Κατάσταση κάλυψης i18n: [../../i18n-coverage.md](../../i18n-coverage.md)
 - Στιγμιότυπο διαχείρισης έργου: [project-triage-snapshot-2026-02-18.md](project-triage-snapshot-2026-02-18.md)
+
+## Άλλες γλώσσες
+
+- English: [../../README.md](../../README.md)
+- 简体中文: [../zh-CN/README.md](../zh-CN/README.md)
+- 日本語: [../ja/README.md](../ja/README.md)
+- Русский: [../ru/README.md](../ru/README.md)
+- Français: [../fr/README.md](../fr/README.md)
+- Tiếng Việt: [../vi/README.md](../vi/README.md)

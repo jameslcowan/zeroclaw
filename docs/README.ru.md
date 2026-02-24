@@ -6,6 +6,8 @@
 
 > Примечание: команды, ключи конфигурации и API-пути сохраняются на английском. Для первоисточника ориентируйтесь на англоязычные документы.
 
+Локализованные хабы: [简体中文](i18n/zh-CN/README.md) · [日本語](i18n/ja/README.md) · [Русский](i18n/ru/README.md) · [Français](i18n/fr/README.md) · [Tiếng Việt](i18n/vi/README.md) · [Ελληνικά](i18n/el/README.md).
+
 ## Быстрые ссылки
 
 | Что нужно | Куда смотреть |
@@ -86,7 +88,8 @@
 ## Другие языки
 
 - English: [README.md](README.md)
-- 简体中文: [README.zh-CN.md](README.zh-CN.md)
-- 日本語: [README.ja.md](README.ja.md)
-- Français: [README.fr.md](README.fr.md)
+- 简体中文: [i18n/zh-CN/README.md](i18n/zh-CN/README.md)
+- 日本語: [i18n/ja/README.md](i18n/ja/README.md)
+- Français: [i18n/fr/README.md](i18n/fr/README.md)
 - Tiếng Việt: [i18n/vi/README.md](i18n/vi/README.md)
+- Ελληνικά: [i18n/el/README.md](i18n/el/README.md)

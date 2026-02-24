@@ -6,6 +6,8 @@
 
 > 注: コマンド名・設定キー・API パスは英語のまま記載します。実装の一次情報は英語版ドキュメントを優先してください。
 
+ローカライズハブ: [简体中文](i18n/zh-CN/README.md) · [日本語](i18n/ja/README.md) · [Русский](i18n/ru/README.md) · [Français](i18n/fr/README.md) · [Tiếng Việt](i18n/vi/README.md) · [Ελληνικά](i18n/el/README.md).
+
 ## すぐに参照したい項目
 
 | やりたいこと | 参照先 |
@@ -86,7 +88,8 @@
 ## 他言語
 
 - English: [README.md](README.md)
-- 简体中文: [README.zh-CN.md](README.zh-CN.md)
-- Русский: [README.ru.md](README.ru.md)
-- Français: [README.fr.md](README.fr.md)
+- 简体中文: [i18n/zh-CN/README.md](i18n/zh-CN/README.md)
+- Русский: [i18n/ru/README.md](i18n/ru/README.md)
+- Français: [i18n/fr/README.md](i18n/fr/README.md)
 - Tiếng Việt: [i18n/vi/README.md](i18n/vi/README.md)
+- Ελληνικά: [i18n/el/README.md](i18n/el/README.md)

@@ -88,7 +88,8 @@
 ## Ngôn ngữ khác
 
 - English: [README.md](../../README.md)
-- 简体中文: [README.zh-CN.md](../../README.zh-CN.md)
-- 日本語: [README.ja.md](../../README.ja.md)
-- Русский: [README.ru.md](../../README.ru.md)
-- Français: [README.fr.md](../../README.fr.md)
+- 简体中文: [../zh-CN/README.md](../zh-CN/README.md)
+- 日本語: [../ja/README.md](../ja/README.md)
+- Русский: [../ru/README.md](../ru/README.md)
+- Français: [../fr/README.md](../fr/README.md)
+- Ελληνικά: [../el/README.md](../el/README.md)

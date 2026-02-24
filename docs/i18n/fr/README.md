@@ -1,0 +1,33 @@
+# Hub de Documentation ZeroClaw (Français)
+
+Cette page est le hub français aligné sur la structure canonique `docs/i18n/<locale>/`.
+
+Dernière mise à jour : **24 février 2026**.
+
+> Note : les commandes, clés de configuration et chemins API restent en anglais.
+
+## Accès rapide
+
+- README français (racine) : [../../../README.fr.md](../../../README.fr.md)
+- Hub docs français (compatibilité) : [../../README.fr.md](../../README.fr.md)
+- Sommaire français (compatibilité) : [../../SUMMARY.fr.md](../../SUMMARY.fr.md)
+- Hub docs anglais : [../../README.md](../../README.md)
+
+## Catégories
+
+- Démarrage : [../../getting-started/README.md](../../getting-started/README.md)
+- Référence : [../../reference/README.md](../../reference/README.md)
+- Opérations et déploiement : [../../operations/README.md](../../operations/README.md)
+- Sécurité : [../../security/README.md](../../security/README.md)
+- Matériel : [../../hardware/README.md](../../hardware/README.md)
+- Contribution / CI : [../../contributing/README.md](../../contributing/README.md)
+- Table des matières locale : [SUMMARY.md](SUMMARY.md)
+
+## Autres langues
+
+- English: [../../README.md](../../README.md)
+- 简体中文: [../zh-CN/README.md](../zh-CN/README.md)
+- 日本語: [../ja/README.md](../ja/README.md)
+- Русский: [../ru/README.md](../ru/README.md)
+- Tiếng Việt: [../vi/README.md](../vi/README.md)
+- Ελληνικά: [../el/README.md](../el/README.md)

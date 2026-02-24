@@ -2,7 +2,7 @@
 
 This document defines the localization structure for ZeroClaw docs and tracks current coverage.
 
-Last refreshed: **February 21, 2026**.
+Last refreshed: **February 24, 2026**.
 
 ## Canonical Layout
 
@@ -21,10 +21,10 @@ Use these i18n paths:
 | Locale | Root README | Canonical Docs Hub | Commands Ref | Config Ref | Troubleshooting | Status |
 |---|---|---|---|---|---|---|
 | `en` | `README.md` | `docs/README.md` | `docs/commands-reference.md` | `docs/config-reference.md` | `docs/troubleshooting.md` | Source of truth |
-| `zh-CN` | `README.zh-CN.md` | `docs/README.zh-CN.md` | - | - | - | Hub-level localized |
-| `ja` | `README.ja.md` | `docs/README.ja.md` | - | - | - | Hub-level localized |
-| `ru` | `README.ru.md` | `docs/README.ru.md` | - | - | - | Hub-level localized |
-| `fr` | `README.fr.md` | `docs/README.fr.md` | - | - | - | Hub-level localized |
+| `zh-CN` | `README.zh-CN.md` | `docs/i18n/zh-CN/README.md` | - | - | - | Hub-level localized (i18n scaffold) |
+| `ja` | `README.ja.md` | `docs/i18n/ja/README.md` | - | - | - | Hub-level localized (i18n scaffold) |
+| `ru` | `README.ru.md` | `docs/i18n/ru/README.md` | - | - | - | Hub-level localized (i18n scaffold) |
+| `fr` | `README.fr.md` | `docs/i18n/fr/README.md` | - | - | - | Hub-level localized (i18n scaffold) |
 | `vi` | `README.vi.md` | `docs/i18n/vi/README.md` | `docs/i18n/vi/commands-reference.md` | `docs/i18n/vi/config-reference.md` | `docs/i18n/vi/troubleshooting.md` | Full tree localized |
 | `el` | `README.el.md` | `docs/i18n/el/README.md` | `docs/i18n/el/commands-reference.md` | `docs/i18n/el/config-reference.md` | `docs/i18n/el/troubleshooting.md` | Full tree localized |
 
@@ -43,6 +43,8 @@ Not all root READMEs are full translations of `README.md`:
 | `el` | Near-complete translation | ~90% |
 
 Hub-style entry points provide quick-start orientation and language navigation but do not replicate the full English README content. This is an accurate status record, not a gap to be immediately resolved.
+
+For `zh-CN`, `ja`, `ru`, and `fr`, canonical i18n directory hubs now exist and link back to docs-root compatibility shims during migration.
 
 ## Collection Index i18n
 

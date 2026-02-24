@@ -4,7 +4,7 @@ Cette page est le point d'entrée principal du système de documentation.
 
 Dernière mise à jour : **20 février 2026**.
 
-Hubs localisés : [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · [Français](README.fr.md) · [Tiếng Việt](i18n/vi/README.md).
+Hubs localisés : [简体中文](i18n/zh-CN/README.md) · [日本語](i18n/ja/README.md) · [Русский](i18n/ru/README.md) · [Français](i18n/fr/README.md) · [Tiếng Việt](i18n/vi/README.md) · [Ελληνικά](i18n/el/README.md).
 
 ## Commencez Ici
 
@@ -89,7 +89,8 @@ Hubs localisés : [简体中文](README.zh-CN.md) · [日本語](README.ja.md) �
 ## Autres langues
 
 - English: [README.md](README.md)
-- 简体中文: [README.zh-CN.md](README.zh-CN.md)
-- 日本語: [README.ja.md](README.ja.md)
-- Русский: [README.ru.md](README.ru.md)
+- 简体中文: [i18n/zh-CN/README.md](i18n/zh-CN/README.md)
+- 日本語: [i18n/ja/README.md](i18n/ja/README.md)
+- Русский: [i18n/ru/README.md](i18n/ru/README.md)
 - Tiếng Việt: [i18n/vi/README.md](i18n/vi/README.md)
+- Ελληνικά: [i18n/el/README.md](i18n/el/README.md)

@@ -6,6 +6,8 @@
 
 > 说明：命令、配置键、API 路径保持英文；实现细节以英文文档为准。
 
+本地化入口： [简体中文](i18n/zh-CN/README.md) · [日本語](i18n/ja/README.md) · [Русский](i18n/ru/README.md) · [Français](i18n/fr/README.md) · [Tiếng Việt](i18n/vi/README.md) · [Ελληνικά](i18n/el/README.md).
+
 ## 快速入口
 
 | 我想要… | 建议阅读 |
@@ -86,7 +88,8 @@
 ## 其他语言
 
 - English: [README.md](README.md)
-- 日本語: [README.ja.md](README.ja.md)
-- Русский: [README.ru.md](README.ru.md)
-- Français: [README.fr.md](README.fr.md)
+- 日本語: [i18n/ja/README.md](i18n/ja/README.md)
+- Русский: [i18n/ru/README.md](i18n/ru/README.md)
+- Français: [i18n/fr/README.md](i18n/fr/README.md)
 - Tiếng Việt: [i18n/vi/README.md](i18n/vi/README.md)
+- Ελληνικά: [i18n/el/README.md](i18n/el/README.md)

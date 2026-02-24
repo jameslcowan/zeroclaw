@@ -4,7 +4,7 @@
 
 Τελευταία ενημέρωση: **21 Φεβρουαρίου 2026**.
 
-Τοπικοποιημένα κέντρα: [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · [Français](README.fr.md) · [Tiếng Việt](i18n/vi/README.md) · [Ελληνικά](i18n/el/README.md).
+Τοπικοποιημένα κέντρα: [简体中文](i18n/zh-CN/README.md) · [日本語](i18n/ja/README.md) · [Русский](i18n/ru/README.md) · [Français](i18n/fr/README.md) · [Tiếng Việt](i18n/vi/README.md) · [Ελληνικά](i18n/el/README.md).
 
 ## Ξεκινήστε από εδώ
 
@@ -88,3 +88,12 @@
 - Ευρετήριο εγγράφων i18n: [i18n/README.md](i18n/README.md)
 - Χάρτης κάλυψης i18n: [i18n-coverage.md](i18n-coverage.md)
 - Στιγμιότυπο διαλογής έργου: [project-triage-snapshot-2026-02-18.md](project-triage-snapshot-2026-02-18.md)
+
+## Άλλες γλώσσες
+
+- English: [README.md](README.md)
+- 简体中文: [i18n/zh-CN/README.md](i18n/zh-CN/README.md)
+- 日本語: [i18n/ja/README.md](i18n/ja/README.md)
+- Русский: [i18n/ru/README.md](i18n/ru/README.md)
+- Français: [i18n/fr/README.md](i18n/fr/README.md)
+- Tiếng Việt: [i18n/vi/README.md](i18n/vi/README.md)

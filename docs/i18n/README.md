@@ -4,19 +4,23 @@ Canonical localized documentation trees live here.
 
 ## Locales
 
-- Vietnamese: [vi/README.md](vi/README.md)
-- Ελληνικά: [el/README.md](el/README.md)
+- 简体中文 (Chinese): [zh-CN/README.md](zh-CN/README.md)
+- 日本語 (Japanese): [ja/README.md](ja/README.md)
+- Русский (Russian): [ru/README.md](ru/README.md)
+- Français (French): [fr/README.md](fr/README.md)
+- Tiếng Việt (Vietnamese): [vi/README.md](vi/README.md)
+- Ελληνικά (Greek): [el/README.md](el/README.md)
 
 ## Structure
 
 - Docs structure map (language/part/function): [../structure/README.md](../structure/README.md)
-- Canonical Vietnamese tree: `docs/i18n/vi/`
-- Compatibility Vietnamese paths: `docs/vi/` and `docs/*.vi.md`
-
-## Structure
-
-- Docs structure map (language/part/function): [../structure/README.md](../structure/README.md)
-- Canonical Vietnamese tree: `docs/i18n/vi/`
-- Compatibility Vietnamese paths: `docs/vi/` and `docs/*.vi.md`
+- Canonical locale trees:
+  - `docs/i18n/zh-CN/`
+  - `docs/i18n/ja/`
+  - `docs/i18n/ru/`
+  - `docs/i18n/fr/`
+  - `docs/i18n/vi/`
+  - `docs/i18n/el/`
+- Compatibility hubs at docs root (`docs/README.<locale>.md`) remain available during migration.
 
 See overall coverage and conventions in [../i18n-coverage.md](../i18n-coverage.md).
