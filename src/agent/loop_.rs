@@ -1873,6 +1873,7 @@ pub(crate) async fn agent_turn(
     silent: bool,
     multimodal_config: &crate::config::MultimodalConfig,
     max_tool_iterations: usize,
+    supports_vision_override: Option<bool>,
 ) -> Result<String> {
     run_tool_call_loop(
         provider,
@@ -1891,6 +1892,7 @@ pub(crate) async fn agent_turn(
         None,
         None,
         &[],
+        supports_vision_override,
     )
     .await
 }
@@ -2081,6 +2083,7 @@ pub(crate) async fn run_tool_call_loop(
     on_delta: Option<tokio::sync::mpsc::Sender<String>>,
     hooks: Option<&crate::hooks::HookRunner>,
     excluded_tools: &[String],
+    supports_vision_override: Option<bool>,
 ) -> Result<String> {
     let max_iterations = if max_tool_iterations == 0 {
         DEFAULT_MAX_TOOL_ITERATIONS
@@ -2106,7 +2109,9 @@ pub(crate) async fn run_tool_call_loop(
         }
 
         let image_marker_count = multimodal::count_image_markers(history);
-        if image_marker_count > 0 && !provider.supports_vision() {
+        // Check vision support: config override takes priority over provider default
+        let vision_supported = supports_vision_override.unwrap_or_else(|| provider.supports_vision());
+        if image_marker_count > 0 && !vision_supported {
             return Err(ProviderCapabilityError {
                 provider: provider_name.to_string(),
                 capability: "vision".to_string(),
@@ -2808,6 +2813,7 @@ pub async fn run(
         zeroclaw_dir: config.config_path.parent().map(std::path::PathBuf::from),
         secrets_encrypt: config.secrets.encrypt,
         reasoning_enabled: config.runtime.reasoning_enabled,
+        supports_vision: config.runtime.supports_vision,
     };
 
     let provider: Box<dyn Provider> = providers::create_routed_provider_with_options(
@@ -3037,6 +3043,7 @@ pub async fn run(
             None,
             None,
             &[],
+            config.runtime.supports_vision,
         )
         .await?;
         final_output = response.clone();
@@ -3159,6 +3166,7 @@ pub async fn run(
                 None,
                 None,
                 &[],
+                config.runtime.supports_vision,
             )
             .await
             {
@@ -3266,6 +3274,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         zeroclaw_dir: config.config_path.parent().map(std::path::PathBuf::from),
         secrets_encrypt: config.secrets.encrypt,
         reasoning_enabled: config.runtime.reasoning_enabled,
+        supports_vision: config.runtime.supports_vision,
     };
     let provider: Box<dyn Provider> = providers::create_routed_provider_with_options(
         provider_name,
@@ -3390,6 +3399,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         true,
         &config.multimodal,
         config.agent.max_tool_iterations,
+        config.runtime.supports_vision,
     )
     .await
 }
@@ -3703,6 +3713,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect_err("provider without vision support should fail");
@@ -3749,6 +3760,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect_err("oversized payload must fail");
@@ -3789,6 +3801,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("valid multimodal payload should pass");
@@ -3915,6 +3928,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("parallel execution should complete");
@@ -3984,6 +3998,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("loop should finish after deduplicating repeated calls");
@@ -4040,6 +4055,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("native fallback id flow should complete");

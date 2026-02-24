@@ -1018,6 +1018,7 @@ data: [DONE]
             secrets_encrypt: false,
             auth_profile_override: None,
             reasoning_enabled: None,
+            supports_vision: None,
         };
         let provider =
             OpenAiCodexProvider::new(&options, None).expect("provider should initialize");

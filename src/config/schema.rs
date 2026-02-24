@@ -2102,6 +2102,13 @@ pub struct RuntimeConfig {
     /// - `Some(false)`: disable reasoning/thinking when supported
     #[serde(default)]
     pub reasoning_enabled: Option<bool>,
+
+    /// Override vision support detection for providers.
+    /// - `None`: use provider's default vision capability
+    /// - `Some(true)`: force vision support enabled
+    /// - `Some(false)`: force vision support disabled
+    #[serde(default)]
+    pub supports_vision: Option<bool>,
 }
 
 /// Docker runtime configuration (`[runtime.docker]` section).
@@ -2176,6 +2183,7 @@ impl Default for RuntimeConfig {
             kind: default_runtime_kind(),
             docker: DockerRuntimeConfig::default(),
             reasoning_enabled: None,
+            supports_vision: None,
         }
     }
 }

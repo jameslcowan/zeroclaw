@@ -411,6 +411,7 @@ impl DelegateTool {
                 None,
                 None,
                 &[],
+                None, // supports_vision_override: use provider default
             ),
         )
         .await;

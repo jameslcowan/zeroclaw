@@ -676,6 +676,8 @@ pub struct ProviderRuntimeOptions {
     pub zeroclaw_dir: Option<PathBuf>,
     pub secrets_encrypt: bool,
     pub reasoning_enabled: Option<bool>,
+    /// Override vision support detection for providers.
+    pub supports_vision: Option<bool>,
 }
 
 impl Default for ProviderRuntimeOptions {
@@ -686,6 +688,7 @@ impl Default for ProviderRuntimeOptions {
             zeroclaw_dir: None,
             secrets_encrypt: true,
             reasoning_enabled: None,
+            supports_vision: None,
         }
     }
 }
