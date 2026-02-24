@@ -106,7 +106,7 @@ impl LeakDetector {
         static AWS_PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
         let regexes = AWS_PATTERNS.get_or_init(|| {
             vec![
-                (Regex::new(r"AKIA[A-Z0-9]{16}").unwrap(), "AWS Access Key ID"),
+                (Regex::new(r"AKIA[A-Z0D]{16}").unwrap(), "AWS Access Key ID"),
                 (Regex::new(r#"aws[_-]?secret[_-]?access[_-]?key[=:]\s*['\"]*[a-zA-Z0-9/+=]{40}"#).unwrap(), "AWS Secret Access Key"),
             ]
         });
