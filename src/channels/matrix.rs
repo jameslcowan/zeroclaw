@@ -322,7 +322,7 @@ impl MatrixChannel {
         match event.content.relates_to.as_ref()? {
             Relation::Reply { in_reply_to } => Some(in_reply_to.event_id.to_string()),
             Relation::Thread(thread) => thread.in_reply_to.as_ref().map(|r| r.event_id.to_string()),
-            Relation::Replacement(_) | Relation::_Custom(_) => None,
+            Relation::Replacement(_) | Relation::_Custom(_) | _ => None,
         }
     }
 
