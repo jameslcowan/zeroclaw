@@ -59,7 +59,7 @@
 
 <p align="center"><code>Αρχιτεκτονική βασισμένη σε χαρακτηριστικά · χρόνος εκτέλεσης ασφαλής εκ προεπιλογής · εναλλάξιμος πάροχος/κανάλι/εργαλείο · πλήρως επεκτάσιμο</code></p>
 
-### 📢 Ανακοινώσεις
+## 📢 Ανακοινώσεις
 
 Χρησιμοποιήστε αυτόν τον πίνακα για σημαντικές ειδοποιήσεις (αλλαγές που προκαλούν ασυμβατότητα, συμβουλές ασφαλείας, παράθυρα συντήρησης και αποκλεισμοί κυκλοφορίας).
 
@@ -124,7 +124,7 @@ ls -lh target/release/zeroclaw
 <details>
 <summary><strong>Windows</strong></summary>
 
-#### Απαιτούμενα
+### Windows: Απαιτούμενα
 
 1. **Εργαλεία δόμησης του Visual Studio** (παρέχει τον σύνδεσμο MSVC και το Windows SDK):
    ```powershell
@@ -144,7 +144,7 @@ ls -lh target/release/zeroclaw
    cargo --version
    ```
 
-#### Προαιρετικά
+### Windows: Προαιρετικά
 
 - **Docker Desktop** — απαιτείται μόνο αν χρησιμοποιείτε τον [χρόνο εκτέλεσης Docker με απομόνωση](#runtime-support-current) (`runtime.kind = "docker"`). Εγκαταστήστε μέσω `winget install Docker.DockerDesktop`.
 
@@ -153,7 +153,7 @@ ls -lh target/release/zeroclaw
 <details>
 <summary><strong>Linux / macOS</strong></summary>
 
-#### Απαιτούμενα
+### Linux / macOS: Απαιτούμενα
 
 1. **Βασικά εργαλεία δόμησης:**
    - **Linux (Debian/Ubuntu):** `sudo apt install build-essential pkg-config`
@@ -201,14 +201,13 @@ curl -LsSf https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main/scripts
 ./bootstrap.sh --prebuilt-only
 ```
 
-#### Προαιρετικά
+### Linux / macOS: Προαιρετικά
 
 - **Docker** — απαιτείται μόνο αν χρησιμοποιείτε τον [χρόνο εκτέλεσης Docker με απομόνωση](#runtime-support-current) (`runtime.kind = "docker"`). Εγκαταστήστε μέσω του διαχειριστή πακέτων σας ή από το [docker.com](https://docs.docker.com/engine/install/).
 
 > **Σημείωση:** Η προεπιλεγμένη εντολή `cargo build --release` χρησιμοποιεί `codegen-units=1` για μείωση της μέγιστης πίεσης μεταγλώττισης. Για ταχύτερες δομήσεις σε ισχυρά μηχανήματα, χρησιμοποιήστε `cargo build --profile release-fast`.
 
 </details>
-
 
 ## Γρήγορη εκκίνηση
 
@@ -413,6 +412,8 @@ zeroclaw agent --provider anthropic -m "hello"
 | **Παλμός καρδιάς** | Μηχανή | Περιοδικές εργασίες HEARTBEAT.md | — |
 | **Δεξιότητες** | Φορτωτής | Δηλώσεις TOML + οδηγίες SKILL.md | Πακέτα δεξιοτήτων κοινότητας |
 | **Ενσωματώσεις** | Μητρώο | 70+ ενσωματώσεις σε 9 κατηγορίες | Σύστημα πρόσθετων |
+
+<a id="runtime-support-current"></a>
 
 ### Υποστήριξη χρόνου εκτέλεσης (τρέχουσα)
 
@@ -1102,7 +1103,7 @@ git push --no-verify
 ## ⚠️ Επίσημο αποθετήριο & προειδοποίηση υποδύσεων
 
 **Αυτό είναι το μοναδικό επίσημο αποθετήριο ZeroClaw:**
-> https://github.com/zeroclaw-labs/zeroclaw
+> <https://github.com/zeroclaw-labs/zeroclaw>
 
 Οποιοδήποτε άλλο αποθετήριο, οργανισμός, τομέας ή πακέτο που ισχυρίζεται ότι είναι «ZeroClaw» ή υπονοεί συνεργασία με το ZeroClaw Labs είναι **μη εξουσιοδοτημένο και δεν συνδέεται με αυτό το έργο**. Γνωστά μη εξουσιοδοτημένα forks θα αναφέρονται στο [TRADEMARK.md](TRADEMARK.md).
 

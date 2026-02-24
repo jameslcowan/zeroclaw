@@ -5,6 +5,7 @@
 ## Τύποι συνδέσεων
 
 ### 1. Σύνδεση τύπου OpenAI (`custom:`)
+
 Για υπηρεσίες που λειτουργούν όπως το OpenAI:
 ```toml
 default_provider = "custom:https://το-api-σας.com"
@@ -13,6 +14,7 @@ default_model = "το-όνομα-του-μοντέλου"
 ```
 
 ### 2. Σύνδεση τύπου Anthropic (`anthropic-custom:`)
+
 Για υπηρεσίες που λειτουργούν όπως το Anthropic:
 ```toml
 default_provider = "anthropic-custom:https://το-api-σας.com"

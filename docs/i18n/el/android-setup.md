@@ -89,12 +89,15 @@ cargo build --release --target aarch64-linux-android
 ## Αντιμετώπιση Προβλημάτων
 
 ### "Permission denied"
+
 ```bash
 chmod +x zeroclaw
 ```
 
 ### "not found" ή σφάλματα linker
+
 Βεβαιωθείτε ότι κατεβάσατε το σωστό binary για την αρχιτεκτονική της συσκευής σας.
 
 ### Παλιό Android (4.x)
+
 Χρησιμοποιήστε το build `armv7-linux-androideabi` με API level 16+.

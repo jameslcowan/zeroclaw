@@ -23,11 +23,13 @@ brew install zeroclaw
    ```
 
 ### Λειτουργία Σενάριου
+
 Από προεπιλογή, το σενάριο εκτελεί:
 1. `cargo build --release --locked`
 2. `cargo install --path . --force --locked`
 
 ### Απαιτήσεις Πόρων και Προ-μεταγλωττισμένα Αρχεία
+
 Η μεταγλώττιση από τον πηγαίο κώδικα απαιτεί τουλάχιστον **2GB RAM** και **6GB ελεύθερο χώρο** στον δίσκο. Σε περίπτωση περιορισμένων πόρων, μπορείτε να χρησιμοποιήσετε προ-μεταγλωττισμένα (prebuilt) αρχεία:
 
 - **Χρήση προ-μεταγλωττισμένων (εάν υπάρχουν)**:
@@ -63,17 +65,20 @@ curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main/scripts
 ## Διαδικασία Εισαγωγής (Onboarding)
 
 ### Μέσω Docker / Podman
+
 ```bash
 ./bootstrap.sh --docker
 ```
 Το σενάριο θα δημιουργήσει μια τοπική εικόνα Docker και θα ξεκινήσει τη διαδικασία onboarding. Οι ρυθμίσεις αποθηκεύονται στον κατάλογο `./.zeroclaw-docker`.
 
 ### Μη Διαδραστική Εισαγωγή
+
 ```bash
 ./bootstrap.sh --onboard --api-key "sk-..." --provider openrouter
 ```
 
 ### Διαδραστική Εισαγωγή
+
 ```bash
 ./bootstrap.sh --interactive-onboard
 ```

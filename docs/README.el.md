@@ -23,8 +23,6 @@
 | Περιηγηθώ στα έγγραφα ανά κατηγορία | [SUMMARY.md](SUMMARY.md) |
 | Δω το στιγμιότυπο PR/issue του έργου | [project-triage-snapshot-2026-02-18.md](project-triage-snapshot-2026-02-18.md) |
 
-
-
 ## Δέντρο γρήγορων αποφάσεων (10 δευτερόλεπτα)
 
 - Χρειάζεστε ρύθμιση για πρώτη φορά ή εγκατάσταση; → [getting-started/README.md](getting-started/README.md)

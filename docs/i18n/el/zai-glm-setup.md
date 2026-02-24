@@ -21,6 +21,7 @@
 ## 2. Διαδικασία Ρύθμισης
 
 ### Ταχεία Διαμόρφωση (Onboarding)
+
 Χρησιμοποιήστε το CLI για αυτόματη ρύθμιση:
 ```bash
 zeroclaw onboard \
@@ -29,6 +30,7 @@ zeroclaw onboard \
 ```
 
 ### Χειροκίνητη Διαμόρφωση
+
 Επεξεργαστείτε το αρχείο `~/.zeroclaw/config.toml`:
 ```toml
 api_key = "YOUR_ZAI_API_KEY"
@@ -52,6 +54,7 @@ default_temperature = 0.7
 ## 4. Επαλήθευση και Διάγνωση
 
 ### Δοκιμή Συνδεσιμότητας (Curl)
+
 ```bash
 curl -X POST "https://api.z.ai/api/coding/paas/v4/chat/completions" \
   -H "Authorization: Bearer YOUR_ZAI_API_KEY" \
@@ -63,6 +66,7 @@ curl -X POST "https://api.z.ai/api/coding/paas/v4/chat/completions" \
 ```
 
 ### Μεταβλητές Περιβάλλοντος
+
 Μπορείτε να ορίσετε το κλειδί στο αρχείο `.env`:
 ```bash
 ZAI_API_KEY=id.secret # Μορφή: abc123.xyz789

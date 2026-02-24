@@ -4,13 +4,17 @@
 
 ## Γρήγορη Εκκίνηση: Προσθήκη Πλακέτας μέσω CLI
 
+```bash
 # Προσθήκη πλακέτας (ενημερώνει το ~/.zeroclaw/config.toml)
+
 zeroclaw peripheral add nucleo-f401re /dev/ttyACM0
 zeroclaw peripheral add arduino-uno /dev/cu.usbmodem12345
 zeroclaw peripheral add rpi-gpio native   # για Raspberry Pi GPIO (Linux)
 
 # Επανεκκίνηση του δαίμονα (daemon) για εφαρμογή
+
 zeroclaw daemon --host 127.0.0.1 --port 42617
+```
 
 ## Υποστηριζόμενες Πλακέτες
 
@@ -22,12 +26,11 @@ zeroclaw daemon --host 127.0.0.1 --port 42617
 | rpi-gpio         | native               | native                        |
 | esp32            | serial               | /dev/ttyUSB0                  |
 
-
-
 ## Χειροκίνητη Ρύθμιση (Manual Config)
 
 Επεξεργαστείτε το αρχείο ~/.zeroclaw/config.toml:
 
+```toml
 [peripherals]
 enabled = true
 datasheet_dir = "docs/datasheets" # προαιρετικό: RAG για "άναψε το κόκκινο led" → pin 13
@@ -43,6 +46,7 @@ board = "arduino-uno"
 transport = "serial"
 path = "/dev/cu.usbmodem12345"
 baud = 115200
+```
 
 ## Προσθήκη Φύλλου Δεδομένων (RAG)
 
@@ -50,8 +54,9 @@ baud = 115200
 
 ### Ψευδώνυμα Ακροδεκτών (Προτεινόμενο)
 
-Προσθέστε μια ενότητα ## Pin Aliases ώστε ο πράκτορας να μπορεί να αντιστοιχίσει το "red led" στον ακροδέκτη 13:
+Προσθέστε μια ενότητα `## Pin Aliases` ώστε ο πράκτορας να μπορεί να αντιστοιχίσει το "red led" στον ακροδέκτη 13:
 
+```markdown
 # Η Πλακέτα Μου
 
 ## Pin Aliases
@@ -61,18 +66,24 @@ baud = 115200
 | red_led     | 13         |
 | builtin_led | 13         |
 | user_led    | 5          |
+```
 
 Ή χρησιμοποιήστε μορφή κλειδιού-τιμής:
 
+```markdown
 ## Pin Aliases
+
 red_led: 13
 builtin_led: 13
+```
 
 ### Φύλλα Δεδομένων PDF
 
 Με τη δυνατότητα rag-pdf, το ZeroClaw μπορεί να ευρετηριάσει αρχεία PDF:
 
+```bash
 cargo build --features hardware,rag-pdf
+```
 
 Τοποθετήστε τα PDF στον κατάλογο των datasheet. Το περιεχόμενό τους εξάγεται και τεμαχίζεται (chunked) για το RAG.
 

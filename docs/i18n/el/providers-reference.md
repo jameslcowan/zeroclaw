@@ -46,15 +46,18 @@ zeroclaw providers
 ## Ειδικές Σημειώσεις
 
 ### Gemini (Google)
+
 - Υποστηρίζει έλεγχο ταυτότητας μέσω API Key ή OAuth (`~/.gemini/oauth_creds.json`).
 - Τα μοντέλα συλλογιστικής (thinking models) υποστηρίζονται εγγενώς· το ZeroClaw φιλτράρει αυτόματα τα εσωτερικά metadata της συλλογιστικής.
 
 ### Ollama
+
 - **Vision**: Υποστηρίζεται μέσω της σύνταξης `[IMAGE:<source>]` στα μηνύματα.
 - **Cloud Routing**: Χρησιμοποιήστε το επίθεμα `:cloud` (π.χ. `llama3:cloud`) για απομακρυσμένα instances. Το `api_url` πρέπει να οριστεί ρητά.
 - **Reasoning**: Η συμπεριφορά συλλογιστικής ελέγχεται μέσω της ρύθμισης `reasoning_enabled` στο αρχείο `config.toml`.
 
 ### AWS Bedrock
+
 - Απαιτεί πλήρη διαπιστευτήρια AWS (Access Key ID και Secret Access Key).
 - Χρησιμοποιεί το Converse API για τη διασφάλιση συμβατότητας με κλήσεις εργαλείων (tool calling).
 

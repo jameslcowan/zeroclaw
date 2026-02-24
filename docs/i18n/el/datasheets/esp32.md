@@ -24,5 +24,6 @@
 - **gpio_read**: `{"id":"1","cmd":"gpio_read","args":{"pin":13}}`
 - **gpio_write**: `{"id":"1","cmd":"gpio_write","args":{"pin":13,"value":1}}`
 
-### Παράδειγμα Απόκρισης:
+### Παράδειγμα Απόκρισης
+
 `{"id":"1","ok":true,"result":"0"}` ή `{"id":"1","ok":true,"result":"done"}`
