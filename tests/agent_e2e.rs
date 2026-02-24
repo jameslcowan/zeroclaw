@@ -801,7 +801,8 @@ async fn e2e_live_research_phase() {
         }
     }
 
-    let provider = OpenAiCodexProvider::new(&ProviderRuntimeOptions::default());
+    let provider = OpenAiCodexProvider::new(&ProviderRuntimeOptions::default(), None)
+        .expect("OpenAI Codex provider should initialize for research test");
     let tools: Vec<Box<dyn Tool>> = vec![Box::new(EchoTool)];
     let observer: Arc<dyn zeroclaw::observability::Observer> = Arc::new(NoopObserver);
 
@@ -1012,6 +1013,7 @@ async fn e2e_agent_research_prompt_guided() {
                     text: Some("done".into()),
                     tool_calls: vec![],
                     usage: None,
+                    reasoning_content: None,
                 });
             }
             Ok(guard.remove(0))
@@ -1029,6 +1031,7 @@ async fn e2e_agent_research_prompt_guided() {
         ),
         tool_calls: vec![], // Empty! Tool call is in text
         usage: None,
+        reasoning_content: None,
     };
 
     // Response 2: Research complete
@@ -1036,6 +1039,7 @@ async fn e2e_agent_research_prompt_guided() {
         text: Some("[RESEARCH COMPLETE]\n- Found: echo works".to_string()),
         tool_calls: vec![],
         usage: None,
+        reasoning_content: None,
     };
 
     // Response 3: Main turn response

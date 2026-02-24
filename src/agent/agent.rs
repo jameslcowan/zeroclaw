@@ -232,7 +232,6 @@ impl AgentBuilder {
             classification_config: self.classification_config.unwrap_or_default(),
             available_hints: self.available_hints.unwrap_or_default(),
             route_model_by_hint: self.route_model_by_hint.unwrap_or_default(),
-            route_model_by_hint: self.route_model_by_hint.unwrap_or_default(),
             research_config: self.research_config.unwrap_or_default(),
         })
     }
