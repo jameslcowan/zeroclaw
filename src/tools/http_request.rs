@@ -12,6 +12,7 @@ pub struct HttpRequestTool {
     allowed_domains: Vec<String>,
     max_response_size: usize,
     timeout_secs: u64,
+    user_agent: String,
 }
 
 impl HttpRequestTool {
@@ -20,12 +21,14 @@ impl HttpRequestTool {
         allowed_domains: Vec<String>,
         max_response_size: usize,
         timeout_secs: u64,
+        user_agent: String,
     ) -> Self {
         Self {
             security,
             allowed_domains: normalize_allowed_domains(allowed_domains),
             max_response_size,
             timeout_secs,
+            user_agent,
         }
     }
 
@@ -123,7 +126,8 @@ impl HttpRequestTool {
         let builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .connect_timeout(Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none());
+            .redirect(reqwest::redirect::Policy::none())
+            .user_agent(self.user_agent.as_str());
         let builder = crate::config::apply_runtime_proxy_to_builder(builder, "tool.http_request");
         let client = builder.build()?;
 
@@ -463,6 +467,7 @@ mod tests {
             allowed_domains.into_iter().map(String::from).collect(),
             1_000_000,
             30,
+            "test".to_string(),
         )
     }
 
@@ -570,7 +575,7 @@ mod tests {
     #[test]
     fn validate_requires_allowlist() {
         let security = Arc::new(SecurityPolicy::default());
-        let tool = HttpRequestTool::new(security, vec![], 1_000_000, 30);
+        let tool = HttpRequestTool::new(security, vec![], 1_000_000, 30, "test".to_string());
         let err = tool
             .validate_url("https://example.com")
             .unwrap_err()
@@ -686,7 +691,7 @@ mod tests {
             autonomy: AutonomyLevel::ReadOnly,
             ..SecurityPolicy::default()
         });
-        let tool = HttpRequestTool::new(security, vec!["example.com".into()], 1_000_000, 30);
+        let tool = HttpRequestTool::new(security, vec!["example.com".into()], 1_000_000, 30, "test".to_string());
         let result = tool
             .execute(json!({"url": "https://example.com"}))
             .await
@@ -701,7 +706,7 @@ mod tests {
             max_actions_per_hour: 0,
             ..SecurityPolicy::default()
         });
-        let tool = HttpRequestTool::new(security, vec!["example.com".into()], 1_000_000, 30);
+        let tool = HttpRequestTool::new(security, vec!["example.com".into()], 1_000_000, 30, "test".to_string());
         let result = tool
             .execute(json!({"url": "https://example.com"}))
             .await
@@ -724,6 +729,7 @@ mod tests {
             vec!["example.com".into()],
             10,
             30,
+            "test".to_string(),
         );
         let text = "hello world this is long";
         let truncated = tool.truncate_response(text);

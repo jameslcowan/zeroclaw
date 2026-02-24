@@ -20,6 +20,7 @@ pub struct WebFetchTool {
     blocked_domains: Vec<String>,
     max_response_size: usize,
     timeout_secs: u64,
+    user_agent: String,
 }
 
 impl WebFetchTool {
@@ -29,6 +30,7 @@ impl WebFetchTool {
         blocked_domains: Vec<String>,
         max_response_size: usize,
         timeout_secs: u64,
+        user_agent: String,
     ) -> Self {
         Self {
             security,
@@ -36,6 +38,7 @@ impl WebFetchTool {
             blocked_domains: normalize_allowed_domains(blocked_domains),
             max_response_size,
             timeout_secs,
+            user_agent,
         }
     }
 
@@ -74,6 +77,55 @@ impl WebFetchTool {
             if append_chunk_with_cap(&mut bytes, &chunk, hard_cap) {
                 break;
             }
+            "nanohtml2text" => {
+                #[cfg(feature = "web-fetch-plaintext")]
+                {
+                    Ok(nanohtml2text::html2text(body))
+                }
+                #[cfg(not(feature = "web-fetch-plaintext"))]
+                {
+                    anyhow::bail!(
+                        "web_fetch provider 'nanohtml2text' requires Cargo feature 'web-fetch-plaintext'"
+                    );
+                }
+            }
+            _ => anyhow::bail!(
+                "Unknown web_fetch provider: '{}'. Set tools.web_fetch.provider to 'fast_html2md', 'nanohtml2text', or 'firecrawl' in config.toml",
+                self.provider
+            ),
+        }
+    }
+
+    fn build_http_client(&self) -> anyhow::Result<reqwest::Client> {
+        let builder = reqwest::Client::builder()
+            .timeout(Duration::from_secs(self.effective_timeout_secs()))
+            .connect_timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .user_agent(self.user_agent.as_str());
+        let builder = crate::config::apply_runtime_proxy_to_builder(builder, "tool.web_fetch");
+        Ok(builder.build()?)
+    }
+
+    async fn fetch_with_http_provider(&self, url: &str) -> anyhow::Result<String> {
+        let client = self.build_http_client()?;
+        let response = client.get(url).send().await?;
+
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| anyhow::anyhow!("Redirect response missing Location header"))?;
+
+            let redirected_url = reqwest::Url::parse(url)
+                .and_then(|base| base.join(location))
+                .or_else(|_| reqwest::Url::parse(location))
+                .map_err(|e| anyhow::anyhow!("Invalid redirect Location header: {e}"))?
+                .to_string();
+
+            // Validate redirect target with the same SSRF/allowlist policy.
+            self.validate_url(&redirected_url)?;
+            return Ok(redirected_url);
         }
 
         Ok(String::from_utf8_lossy(&bytes).into_owned())
@@ -529,6 +581,7 @@ mod tests {
             blocked_domains.into_iter().map(String::from).collect(),
             500_000,
             30,
+            "ZeroClaw/1.0".to_string(),
         )
     }
 
@@ -620,7 +673,17 @@ mod tests {
     #[test]
     fn validate_requires_allowlist() {
         let security = Arc::new(SecurityPolicy::default());
-        let tool = WebFetchTool::new(security, vec![], vec![], 500_000, 30);
+        let tool = WebFetchTool::new(
+            security,
+            "fast_html2md".into(),
+            None,
+            None,
+            vec![],
+            vec![],
+            500_000,
+            30,
+            "test".to_string(),
+        );
         let err = tool
             .validate_url("https://example.com")
             .unwrap_err()
@@ -714,7 +777,17 @@ mod tests {
             autonomy: AutonomyLevel::ReadOnly,
             ..SecurityPolicy::default()
         });
-        let tool = WebFetchTool::new(security, vec!["example.com".into()], vec![], 500_000, 30);
+        let tool = WebFetchTool::new(
+            security,
+            "fast_html2md".into(),
+            None,
+            None,
+            vec!["example.com".into()],
+            vec![],
+            500_000,
+            30,
+            "test".to_string(),
+        );
         let result = tool
             .execute(json!({"url": "https://example.com"}))
             .await
@@ -729,7 +802,17 @@ mod tests {
             max_actions_per_hour: 0,
             ..SecurityPolicy::default()
         });
-        let tool = WebFetchTool::new(security, vec!["example.com".into()], vec![], 500_000, 30);
+        let tool = WebFetchTool::new(
+            security,
+            "fast_html2md".into(),
+            None,
+            None,
+            vec!["example.com".into()],
+            vec![],
+            500_000,
+            30,
+            "test".to_string(),
+        );
         let result = tool
             .execute(json!({"url": "https://example.com"}))
             .await
@@ -755,6 +838,7 @@ mod tests {
             vec![],
             10,
             30,
+            "test".to_string(),
         );
         let text = "hello world this is long";
         let truncated = tool.truncate_response(text);
