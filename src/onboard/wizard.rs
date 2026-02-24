@@ -76,6 +76,139 @@ enum InteractiveOnboardingMode {
     UpdateProviderOnly,
 }
 
+// ── Navigation support for interactive onboarding ──────────────────
+
+/// Steps in the onboarding wizard
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum WizardStep {
+    Workspace = 1,
+    Provider = 2,
+    Channels = 3,
+    Tunnel = 4,
+    ToolMode = 5,
+    Hardware = 6,
+    Memory = 7,
+    ProjectContext = 8,
+    WorkspaceFiles = 9,
+}
+
+impl WizardStep {
+    fn step_number(&self) -> u8 {
+        *self as u8
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            WizardStep::Workspace => "Workspace Setup",
+            WizardStep::Provider => "AI Provider & API Key",
+            WizardStep::Channels => "Channels (How You Talk to ZeroClaw)",
+            WizardStep::Tunnel => "Tunnel (Expose to Internet)",
+            WizardStep::ToolMode => "Tool Mode & Security",
+            WizardStep::Hardware => "Hardware (Physical World)",
+            WizardStep::Memory => "Memory Configuration",
+            WizardStep::ProjectContext => "Project Context (Personalize Your Agent)",
+            WizardStep::WorkspaceFiles => "Workspace Files",
+        }
+    }
+
+    fn total_steps() -> u8 {
+        9
+    }
+
+    fn prev(&self) -> Option<WizardStep> {
+        match self {
+            WizardStep::Workspace => None,
+            WizardStep::Provider => Some(WizardStep::Workspace),
+            WizardStep::Channels => Some(WizardStep::Provider),
+            WizardStep::Tunnel => Some(WizardStep::Channels),
+            WizardStep::ToolMode => Some(WizardStep::Tunnel),
+            WizardStep::Hardware => Some(WizardStep::ToolMode),
+            WizardStep::Memory => Some(WizardStep::Hardware),
+            WizardStep::ProjectContext => Some(WizardStep::Memory),
+            WizardStep::WorkspaceFiles => Some(WizardStep::ProjectContext),
+        }
+    }
+
+    fn next(&self) -> Option<WizardStep> {
+        match self {
+            WizardStep::Workspace => Some(WizardStep::Provider),
+            WizardStep::Provider => Some(WizardStep::Channels),
+            WizardStep::Channels => Some(WizardStep::Tunnel),
+            WizardStep::Tunnel => Some(WizardStep::ToolMode),
+            WizardStep::ToolMode => Some(WizardStep::Hardware),
+            WizardStep::Hardware => Some(WizardStep::Memory),
+            WizardStep::Memory => Some(WizardStep::ProjectContext),
+            WizardStep::ProjectContext => Some(WizardStep::WorkspaceFiles),
+            WizardStep::WorkspaceFiles => None,
+        }
+    }
+}
+
+/// Navigation action after completing a step
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NavAction {
+    Continue,
+    GoBack,
+    Exit,
+}
+
+/// Asks the user what to do after completing a step.
+/// Returns the navigation action chosen.
+fn ask_navigation(current_step: WizardStep) -> Result<NavAction> {
+    let has_prev = current_step.prev().is_some();
+
+    let options = if has_prev {
+        vec!["Continue to next step", "Go back to previous step", "Exit wizard"]
+    } else {
+        vec!["Continue to next step", "Exit wizard"]
+    };
+
+    let selection = Select::new()
+        .with_prompt(format!(
+            "  {} What would you like to do?",
+            style("↩").cyan()
+        ))
+        .items(&options)
+        .default(0)
+        .interact()?;
+
+    if has_prev {
+        match selection {
+            0 => Ok(NavAction::Continue),
+            1 => Ok(NavAction::GoBack),
+            2 => Ok(NavAction::Exit),
+            _ => Ok(NavAction::Continue),
+        }
+    } else {
+        match selection {
+            0 => Ok(NavAction::Continue),
+            1 => Ok(NavAction::Exit),
+            _ => Ok(NavAction::Continue),
+        }
+    }
+}
+
+/// Holds collected wizard data to enable navigation between steps
+#[derive(Debug, Clone, Default)]
+struct WizardState {
+    workspace_dir: Option<PathBuf>,
+    config_path: Option<PathBuf>,
+    provider: Option<String>,
+    api_key: Option<String>,
+    model: Option<String>,
+    provider_api_url: Option<String>,
+    channels_config: Option<ChannelsConfig>,
+    tunnel_config: Option<crate::config::TunnelConfig>,
+    composio_config: Option<ComposioConfig>,
+    secrets_config: Option<SecretsConfig>,
+    browser_config: Option<BrowserConfig>,
+    http_request_config: Option<HttpRequestConfig>,
+    web_search_config: Option<WebSearchConfig>,
+    hardware_config: Option<HardwareConfig>,
+    memory_config: Option<MemoryConfig>,
+    project_ctx: Option<ProjectContext>,
+}
+
 pub async fn run_wizard(force: bool) -> Result<Config> {
     println!("{}", style(BANNER).cyan().bold());
 
@@ -89,41 +222,128 @@ pub async fn run_wizard(force: bool) -> Result<Config> {
         "  {}",
         style("This wizard will configure your agent in under 60 seconds.").dim()
     );
+    println!(
+        "  {}",
+        style("Tip: You can go back to previous steps at any time.").dim()
+    );
     println!();
 
-    print_step(1, 9, "Workspace Setup");
-    let (workspace_dir, config_path) = setup_workspace().await?;
-    match resolve_interactive_onboarding_mode(&config_path, force)? {
-        InteractiveOnboardingMode::FullOnboarding => {}
-        InteractiveOnboardingMode::UpdateProviderOnly => {
-            return run_provider_update_wizard(&workspace_dir, &config_path).await;
+    // Initialize wizard state to hold collected data
+    let mut state = WizardState::default();
+    let mut current_step = WizardStep::Workspace;
+
+    // Main wizard loop with navigation support
+    loop {
+        match current_step {
+            WizardStep::Workspace => {
+                print_step(current_step.step_number(), WizardStep::total_steps(), current_step.title());
+                let (workspace_dir, config_path) = setup_workspace().await?;
+                match resolve_interactive_onboarding_mode(&config_path, force)? {
+                    InteractiveOnboardingMode::FullOnboarding => {}
+                    InteractiveOnboardingMode::UpdateProviderOnly => {
+                        return run_provider_update_wizard(&workspace_dir, &config_path).await;
+                    }
+                }
+                state.workspace_dir = Some(workspace_dir);
+                state.config_path = Some(config_path);
+            }
+            WizardStep::Provider => {
+                print_step(current_step.step_number(), WizardStep::total_steps(), current_step.title());
+                let workspace_dir = state.workspace_dir.clone().unwrap_or_default();
+                let (provider, api_key, model, provider_api_url) = setup_provider(&workspace_dir).await?;
+                state.provider = Some(provider);
+                state.api_key = if api_key.is_empty() { None } else { Some(api_key) };
+                state.model = Some(model);
+                state.provider_api_url = provider_api_url;
+            }
+            WizardStep::Channels => {
+                print_step(current_step.step_number(), WizardStep::total_steps(), current_step.title());
+                let channels_config = setup_channels()?;
+                state.channels_config = Some(channels_config);
+            }
+            WizardStep::Tunnel => {
+                print_step(current_step.step_number(), WizardStep::total_steps(), current_step.title());
+                let tunnel_config = setup_tunnel()?;
+                state.tunnel_config = Some(tunnel_config);
+            }
+            WizardStep::ToolMode => {
+                print_step(current_step.step_number(), WizardStep::total_steps(), current_step.title());
+                let (composio_config, secrets_config, browser_config, http_request_config, web_search_config) =
+                    setup_tool_mode()?;
+                state.composio_config = Some(composio_config);
+                state.secrets_config = Some(secrets_config);
+                state.browser_config = Some(browser_config);
+                state.http_request_config = Some(http_request_config);
+                state.web_search_config = Some(web_search_config);
+            }
+            WizardStep::Hardware => {
+                print_step(current_step.step_number(), WizardStep::total_steps(), current_step.title());
+                let hardware_config = setup_hardware()?;
+                state.hardware_config = Some(hardware_config);
+            }
+            WizardStep::Memory => {
+                print_step(current_step.step_number(), WizardStep::total_steps(), current_step.title());
+                let memory_config = setup_memory()?;
+                state.memory_config = Some(memory_config);
+            }
+            WizardStep::ProjectContext => {
+                print_step(current_step.step_number(), WizardStep::total_steps(), current_step.title());
+                let project_ctx = setup_project_context()?;
+                state.project_ctx = Some(project_ctx);
+            }
+            WizardStep::WorkspaceFiles => {
+                print_step(current_step.step_number(), WizardStep::total_steps(), current_step.title());
+                let workspace_dir = state.workspace_dir.clone().unwrap_or_default();
+                let project_ctx = state.project_ctx.clone().unwrap_or_default();
+                scaffold_workspace(&workspace_dir, &project_ctx).await?;
+                // After final step, build and save config
+                break;
+            }
+        }
+
+        // Ask for navigation action after each step
+        match ask_navigation(current_step)? {
+            NavAction::Continue => {
+                if let Some(next) = current_step.next() {
+                    current_step = next;
+                } else {
+                    // No more steps, finish wizard
+                    break;
+                }
+            }
+            NavAction::GoBack => {
+                if let Some(prev) = current_step.prev() {
+                    current_step = prev;
+                }
+            }
+            NavAction::Exit => {
+                println!();
+                println!(
+                    "  {} Wizard cancelled. Run {} to start again.",
+                    style("!").yellow(),
+                    style("zeroclaw init").cyan()
+                );
+                std::process::exit(0);
+            }
         }
     }
 
-    print_step(2, 9, "AI Provider & API Key");
-    let (provider, api_key, model, provider_api_url) = setup_provider(&workspace_dir).await?;
-
-    print_step(3, 9, "Channels (How You Talk to ZeroClaw)");
-    let channels_config = setup_channels()?;
-
-    print_step(4, 9, "Tunnel (Expose to Internet)");
-    let tunnel_config = setup_tunnel()?;
-
-    print_step(5, 9, "Tool Mode & Security");
-    let (composio_config, secrets_config, browser_config, http_request_config, web_search_config) =
-        setup_tool_mode()?;
-
-    print_step(6, 9, "Hardware (Physical World)");
-    let hardware_config = setup_hardware()?;
-
-    print_step(7, 9, "Memory Configuration");
-    let memory_config = setup_memory()?;
-
-    print_step(8, 9, "Project Context (Personalize Your Agent)");
-    let project_ctx = setup_project_context()?;
-
-    print_step(9, 9, "Workspace Files");
-    scaffold_workspace(&workspace_dir, &project_ctx).await?;
+    // Build config from collected state
+    let workspace_dir = state.workspace_dir.unwrap_or_default();
+    let config_path = state.config_path.unwrap_or_default();
+    let api_key = state.api_key.unwrap_or_default();
+    let provider = state.provider.unwrap_or_default();
+    let model = state.model.unwrap_or_default();
+    let provider_api_url = state.provider_api_url;
+    let channels_config = state.channels_config.unwrap_or_default();
+    let tunnel_config = state.tunnel_config.unwrap_or_default();
+    let composio_config = state.composio_config.unwrap_or_default();
+    let secrets_config = state.secrets_config.unwrap_or_default();
+    let browser_config = state.browser_config.unwrap_or_default();
+    let http_request_config = state.http_request_config.unwrap_or_default();
+    let web_search_config = state.web_search_config.unwrap_or_default();
+    let hardware_config = state.hardware_config.unwrap_or_default();
+    let memory_config = state.memory_config.unwrap_or_default();
 
     // ── Build config ──
     // Defaults: SQLite memory, supervised autonomy, workspace-scoped, native runtime
