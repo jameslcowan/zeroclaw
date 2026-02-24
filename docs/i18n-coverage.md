@@ -4,6 +4,8 @@ This document defines the localization structure for ZeroClaw docs and tracks cu
 
 Last refreshed: **February 24, 2026**.
 
+Execution guide: [i18n-guide.md](i18n-guide.md)
+
 ## Canonical Layout
 
 Use these i18n paths:
@@ -60,6 +62,7 @@ Localized `README.md` files under collection directories (`docs/getting-started/
 - Prefer concise, operator-oriented localization over literal translation.
 - Update "Last refreshed" / "Last synchronized" dates when localized pages change.
 - Ensure every localized hub has an "Other languages" section.
+- Follow [i18n-guide.md](i18n-guide.md) for mandatory completion and deferral policy.
 
 ## Adding a New Locale
 

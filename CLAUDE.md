@@ -1,6 +1,6 @@
-# AGENTS.md — ZeroClaw Agent Engineering Protocol
+# CLAUDE.md — ZeroClaw Agent Engineering Protocol
 
-This file defines the default working protocol for coding agents in this repository.
+This file defines the default working protocol for Claude agents in this repository.
 Scope: entire repository.
 
 ## 1) Project Snapshot (Read First)
@@ -249,7 +249,7 @@ All contributors (human or agent) must follow the same collaboration flow:
 
 ### 6.1A PR Disposition and Workflow Authority (Required)
 
-- Decide merge/close outcomes from repository-local authority in this order: `.github/workflows/**`, GitHub branch protection/rulesets, `docs/pr-workflow.md`, then this `AGENTS.md`.
+- Decide merge/close outcomes from repository-local authority in this order: `.github/workflows/**`, GitHub branch protection/rulesets, `docs/pr-workflow.md`, then this `CLAUDE.md`.
 - External agent skills/templates are execution aids only; they must not override repository-local policy.
 - A normal contributor PR targeting `main` is a routing defect, not by itself a closure reason; if intent and content are legitimate, retarget to `dev`.
 - Direct-close the PR (do not supersede/replay) when high-confidence integrity-risk signals exist:

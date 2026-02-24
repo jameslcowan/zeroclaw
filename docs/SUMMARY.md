@@ -23,6 +23,7 @@ Last refreshed: **February 18, 2026**.
 - Greek Docs Hub: [i18n/el/README.md](i18n/el/README.md)
 - i18n Docs Index: [i18n/README.md](i18n/README.md)
 - i18n Coverage Map: [i18n-coverage.md](i18n-coverage.md)
+- i18n Completion Guide: [i18n-guide.md](i18n-guide.md)
 
 ## Collections
 
