@@ -26,24 +26,24 @@
 
 ## Дерево решений на 10 секунд
 
-- Нужна первая установка и быстрый старт → [getting-started/README.md](getting-started/README.md)
-- Нужны точные команды и ключи конфигурации → [reference/README.md](reference/README.md)
-- Нужны операции/сервисный режим/деплой → [operations/README.md](operations/README.md)
+- Нужна первая установка и быстрый старт → [getting-started/README.ru.md](getting-started/README.ru.md)
+- Нужны точные команды и ключи конфигурации → [reference/README.ru.md](reference/README.ru.md)
+- Нужны операции/сервисный режим/деплой → [operations/README.ru.md](operations/README.ru.md)
 - Есть ошибки, сбои или регрессии → [troubleshooting.md](troubleshooting.md)
-- Нужны материалы по безопасности и roadmap → [security/README.md](security/README.md)
-- Работаете с платами и периферией → [hardware/README.md](hardware/README.md)
-- Нужны процессы вклада, ревью и CI → [contributing/README.md](contributing/README.md)
+- Нужны материалы по безопасности и roadmap → [security/README.ru.md](security/README.ru.md)
+- Работаете с платами и периферией → [hardware/README.ru.md](hardware/README.ru.md)
+- Нужны процессы вклада, ревью и CI → [contributing/README.ru.md](contributing/README.ru.md)
 - Нужна полная карта docs → [SUMMARY.md](SUMMARY.md)
 
 ## Навигация по категориям (рекомендуется)
 
-- Старт и установка: [getting-started/README.md](getting-started/README.md)
-- Справочники: [reference/README.md](reference/README.md)
-- Операции и деплой: [operations/README.md](operations/README.md)
-- Безопасность: [security/README.md](security/README.md)
-- Аппаратная часть: [hardware/README.md](hardware/README.md)
-- Вклад и CI: [contributing/README.md](contributing/README.md)
-- Снимки проекта: [project/README.md](project/README.md)
+- Старт и установка: [getting-started/README.ru.md](getting-started/README.ru.md)
+- Справочники: [reference/README.ru.md](reference/README.ru.md)
+- Операции и деплой: [operations/README.ru.md](operations/README.ru.md)
+- Безопасность: [security/README.ru.md](security/README.ru.md)
+- Аппаратная часть: [hardware/README.ru.md](hardware/README.ru.md)
+- Вклад и CI: [contributing/README.ru.md](contributing/README.ru.md)
+- Снимки проекта: [project/README.ru.md](project/README.ru.md)
 
 ## По ролям
 
@@ -71,7 +71,7 @@
 
 > Примечание: часть документов в этом разделе относится к proposal/roadmap и может содержать гипотетические команды/конфигурации. Для текущего поведения сначала смотрите [config-reference.md](config-reference.md), [operations-runbook.md](operations-runbook.md), [troubleshooting.md](troubleshooting.md).
 
-- [security/README.md](security/README.md)
+- [security/README.ru.md](security/README.ru.md)
 - [agnostic-security.md](agnostic-security.md)
 - [frictionless-security.md](frictionless-security.md)
 - [sandboxing.md](sandboxing.md)
