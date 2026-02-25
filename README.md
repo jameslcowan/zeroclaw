@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache%202.0-blue.svg" alt="License: MIT OR Apache-2.0" /></a>
-  <a href="NOTICE"><img src="https://img.shields.io/github/contributors/zeroclaw-labs/zeroclaw?color=green" alt="Contributors" /></a>
+  <a href="NOTICE"><img src="https://img.shields.io/badge/contributors-27+-green.svg" alt="Contributors" /></a>
   <a href="https://buymeacoffee.com/argenistherose"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Donate-yellow.svg?style=flat&logo=buy-me-a-coffee" alt="Buy Me a Coffee" /></a>
   <a href="https://x.com/zeroclawlabs?s=21"><img src="https://img.shields.io/badge/X-%40zeroclawlabs-000000?style=flat&logo=x&logoColor=white" alt="X: @zeroclawlabs" /></a>
   <a href="https://zeroclawlabs.cn/group.jpg"><img src="https://img.shields.io/badge/WeChat-Group-B7D7A8?logo=wechat&logoColor=white" alt="WeChat Group" /></a>
@@ -25,7 +25,7 @@ Built by students and members of the Harvard, MIT, and Sundai.Club communities.
 </p>
 
 <p align="center">
-  🌐 <strong>Languages:</strong> <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ru.md">Русский</a> · <a href="README.fr.md">Français</a> · <a href="README.vi.md">Tiếng Việt</a> · <a href="README.el.md">Ελληνικά</a>
+  🌐 <strong>Languages:</strong> <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ru.md">Русский</a> · <a href="README.fr.md">Français</a> · <a href="README.vi.md">Tiếng Việt</a>
 </p>
 
 <p align="center">
@@ -72,7 +72,6 @@ Use this board for important notices (breaking changes, security advisories, mai
 - 💰 **Cost-Efficient Deployment:** Designed for low-cost boards and small cloud instances without heavyweight runtime dependencies.
 - ⚡ **Fast Cold Starts:** Single-binary Rust runtime keeps command and daemon startup near-instant for daily operations.
 - 🌍 **Portable Architecture:** One binary-first workflow across ARM, x86, and RISC-V with swappable providers/channels/tools.
-- 🔍 **Research Phase:** Proactive information gathering through tools before response generation — reduces hallucinations by fact-checking first.
 
 ### Why teams pick ZeroClaw
 
@@ -219,32 +218,6 @@ To require binary-only install with no source fallback:
 
 ```bash
 brew install zeroclaw
-```
-
-### Linux pre-built installer (beginner-friendly)
-
-For Linux hosts that prefer a pre-built binary (no local Rust build), use the
-repository-maintained release installer:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main/scripts/install-release.sh | bash
-```
-
-What it does:
-
-- Detects your Linux CPU architecture (`x86_64`, `aarch64`, `armv7`)
-- Downloads the matching asset from the latest official GitHub release
-- Installs `zeroclaw` into a local bin directory (or `/usr/local/bin` if needed)
-- Starts `zeroclaw onboard` (skip with `--no-onboard`)
-
-Examples:
-
-```bash
-# Install and start onboarding (default)
-curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main/scripts/install-release.sh | bash
-
-# Install only (no onboarding)
-curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main/scripts/install-release.sh | bash -s -- --no-onboard
 ```
 
 ### One-click bootstrap
@@ -648,6 +621,122 @@ WhatsApp uses Meta's Cloud API with webhooks (push-based, not polling):
 
 6. **Test:** Send a message to your WhatsApp Business number — ZeroClaw will respond via the LLM.
 
+### Lark / Feishu Setup
+
+ZeroClaw supports both Lark (international) and Feishu (CN) under a single `channel-lark` feature flag, compiled separately from the default build to keep binary size lean.
+
+- **Lark** — use `[channels_config.lark]`; endpoints route to `open.larksuite.com`
+- **Feishu** — use `[channels_config.feishu]`; endpoints route to `open.feishu.cn`
+
+Both platforms support two receive modes:
+
+- **WebSocket mode** (default): persistent long-connection; no public URL required
+- **Webhook mode**: HTTP callback server; requires a public HTTPS endpoint
+
+#### Step 1: Build with Lark / Feishu support
+
+```bash
+cargo build --features channel-lark
+```
+
+Without `--features channel-lark`, any `[channels_config.lark]` or `[channels_config.feishu]` block in config is silently skipped with a warning. Running `zeroclaw channel list` will confirm which channels are active in the current build.
+
+#### Step 2: Create a bot app and get credentials
+
+- **Lark:** [open.larksuite.com/app](https://open.larksuite.com/app) → Create App → Enable Bot capability
+- **Feishu:** [open.feishu.cn/app](https://open.feishu.cn/app) → 创建应用 → 启用机器人能力
+
+From the app dashboard, collect:
+
+- **App ID** and **App Secret** — from *Credentials & Basic Info*
+- **Verification Token** — from *Event Subscriptions* (needed for webhook mode: Lark/Feishu sends this token in every challenge and event, and ZeroClaw will reject requests where the token does not match)
+
+#### Step 3: Grant bot permissions
+
+In the developer console, add the following permissions under *Permissions & Scopes*:
+
+- `im:message` — receive and send messages
+- `im:message.group_at_msg` — receive group @-mention messages (if using groups)
+
+Publish the app version to apply permissions.
+
+#### WebSocket mode (recommended — no public URL required)
+
+1. **Configure ZeroClaw:**
+
+    ```toml
+    # Lark (international)
+    [channels_config.lark]
+    app_id = "cli_xxxxxxxxxxxx"
+    app_secret = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    allowed_users = ["*"]          # or list specific open_ids
+    mention_only = false           # optional: only respond when @mentioned in groups
+    receive_mode = "websocket"     # default; may be omitted
+
+    # Feishu (CN) — separate block, same fields (no mention_only or use_feishu)
+    [channels_config.feishu]
+    app_id = "cli_xxxxxxxxxxxx"
+    app_secret = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    allowed_users = ["*"]
+    receive_mode = "websocket"
+    ```
+
+2. **Enable Long Connection in the developer console:**
+    - Go to *Event Subscriptions* → enable **Using Long Connection to Receive Events**
+    - Subscribe to the `im.message.receive_v1` event
+    - No callback URL is needed
+
+3. **Start the channel:**
+
+    ```bash
+    zeroclaw channel start
+    ```
+
+4. **Test:** Send a direct message to your bot — ZeroClaw will respond via the LLM.
+
+#### Webhook mode (legacy — requires a public HTTPS endpoint; WebSocket mode preferred for new setups)
+
+1. **Configure ZeroClaw:**
+
+    ```toml
+    # Lark (international)
+    [channels_config.lark]
+    app_id = "cli_xxxxxxxxxxxx"
+    app_secret = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    verification_token = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    allowed_users = ["*"]
+    mention_only = false
+    receive_mode = "webhook"
+    port = 8081                    # ZeroClaw starts an embedded HTTP server on this port
+
+    # Feishu (CN)
+    [channels_config.feishu]
+    app_id = "cli_xxxxxxxxxxxx"
+    app_secret = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    verification_token = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    allowed_users = ["*"]
+    receive_mode = "webhook"
+    port = 8082                    # use a different port if running both simultaneously
+    ```
+
+2. **Start the channel and expose it with a tunnel:**
+
+    ```bash
+    zeroclaw channel start
+    ```
+
+    This starts an embedded webhook listener on the configured `port` (e.g. `8081`). Lark/Feishu require an HTTPS callback URL, so expose the port with a tunnel (ngrok, Cloudflare Tunnel, Tailscale Funnel).
+
+3. **Configure Event Subscriptions in the developer console:**
+    - Go to *Event Subscriptions* → select **HTTP callback**
+    - Set the **Request URL** to `https://your-tunnel-host/lark`
+    - Subscribe to the `im.message.receive_v1` event
+    - Save — the console immediately verifies the URL; ZeroClaw must be running
+
+4. **Test:** Send a direct message to your bot — ZeroClaw will respond via the LLM.
+
+> **Legacy note:** `[channels_config.lark] use_feishu = true` is still accepted for backward compatibility but is deprecated. Use `[channels_config.feishu]` for new Feishu setups.
+
 ## Configuration
 
 Config: `~/.zeroclaw/config.toml` (created by `onboard`)
@@ -684,7 +773,6 @@ keyword_weight = 0.3
 # schema = "public"
 # table = "memories"
 # connect_timeout_secs = 15
-# tls = true                  # true = TLS (cert not verified), false = plain TCP (default)
 
 [gateway]
 port = 42617                    # default
