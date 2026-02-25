@@ -296,10 +296,7 @@ impl OpenAiCompatibleProvider {
 
     fn http_client(&self) -> Client {
         // If custom TLS or user-agent is configured, build a custom client
-        if self.tls_ca_cert_path.is_some()
-            || self.tls_insecure
-            || self.user_agent.is_some()
-        {
+        if self.tls_ca_cert_path.is_some() || self.tls_insecure || self.user_agent.is_some() {
             let mut headers = HeaderMap::new();
             if let Some(ua) = self.user_agent.as_deref() {
                 if let Ok(value) = HeaderValue::from_str(ua) {
@@ -326,26 +323,24 @@ impl OpenAiCompatibleProvider {
                 let cert_path = std::path::Path::new(expanded_path.as_ref());
 
                 match std::fs::read(cert_path) {
-                    Ok(cert_bytes) => {
-                        match reqwest::Certificate::from_pem(&cert_bytes) {
-                            Ok(cert) => {
-                                builder = builder.add_root_certificate(cert);
-                                tracing::info!(
-                                    provider = %self.name,
-                                    cert_path = %cert_path.display(),
-                                    "Added custom CA certificate to trust store"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    provider = %self.name,
-                                    cert_path = %cert_path.display(),
-                                    error = %e,
-                                    "Failed to parse CA certificate as PEM"
-                                );
-                            }
+                    Ok(cert_bytes) => match reqwest::Certificate::from_pem(&cert_bytes) {
+                        Ok(cert) => {
+                            builder = builder.add_root_certificate(cert);
+                            tracing::info!(
+                                provider = %self.name,
+                                cert_path = %cert_path.display(),
+                                "Added custom CA certificate to trust store"
+                            );
                         }
-                    }
+                        Err(e) => {
+                            tracing::warn!(
+                                provider = %self.name,
+                                cert_path = %cert_path.display(),
+                                error = %e,
+                                "Failed to parse CA certificate as PEM"
+                            );
+                        }
+                    },
                     Err(e) => {
                         tracing::warn!(
                             provider = %self.name,
