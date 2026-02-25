@@ -51,6 +51,10 @@ pub struct OpenAiCompatibleProvider {
     api_mode: CompatibleApiMode,
     /// Optional max token cap propagated to outbound requests.
     max_tokens_override: Option<u32>,
+    /// Path to a custom CA certificate file (PEM format) for TLS verification.
+    tls_ca_cert_path: Option<String>,
+    /// If true, disable TLS certificate verification entirely (insecure).
+    tls_insecure: bool,
 }
 
 /// How the provider expects the API key to be sent.
@@ -254,6 +258,8 @@ impl OpenAiCompatibleProvider {
             native_tool_calling: !merge_system_into_user,
             api_mode,
             max_tokens_override: max_tokens_override.filter(|value| *value > 0),
+            tls_ca_cert_path: None,
+            tls_insecure: false,
         }
     }
 
