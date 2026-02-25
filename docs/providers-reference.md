@@ -44,7 +44,6 @@ credential is not reused for fallback providers.
 | `bedrock` | `aws-bedrock` | No | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (optional: `AWS_REGION`) |
 | `qianfan` | `baidu` | No | `QIANFAN_API_KEY` |
 | `doubao` | `volcengine`, `ark`, `doubao-cn` | No | `ARK_API_KEY`, `DOUBAO_API_KEY` |
-| `hunyuan` | `tencent` | No | `HUNYUAN_API_KEY` |
 | `qwen` | `dashscope`, `qwen-intl`, `dashscope-intl`, `qwen-us`, `dashscope-us`, `qwen-code`, `qwen-oauth`, `qwen_oauth` | No | `QWEN_OAUTH_TOKEN`, `DASHSCOPE_API_KEY` |
 | `groq` | — | No | `GROQ_API_KEY` |
 | `mistral` | — | No | `MISTRAL_API_KEY` |
@@ -52,7 +51,6 @@ credential is not reused for fallback providers.
 | `deepseek` | — | No | `DEEPSEEK_API_KEY` |
 | `together` | `together-ai` | No | `TOGETHER_API_KEY` |
 | `fireworks` | `fireworks-ai` | No | `FIREWORKS_API_KEY` |
-| `novita` | — | No | `NOVITA_API_KEY` |
 | `perplexity` | — | No | `PERPLEXITY_API_KEY` |
 | `cohere` | — | No | `COHERE_API_KEY` |
 | `copilot` | `github-copilot` | No | (use config/`API_KEY` fallback with GitHub token) |
@@ -116,13 +114,6 @@ credential is not reused for fallback providers.
 - If `default_model` ends with `:cloud` while `api_url` is local or unset, config validation fails early with an actionable error.
 - Local Ollama model discovery intentionally excludes `:cloud` entries to avoid selecting cloud-only models in local mode.
 
-### Hunyuan Notes
-
-- Provider ID: `hunyuan` (alias: `tencent`)
-- Base API URL: `https://api.hunyuan.cloud.tencent.com/v1`
-- Authentication: `HUNYUAN_API_KEY` (obtain from [Tencent Cloud console](https://console.cloud.tencent.com/hunyuan))
-- Recommended models: `hunyuan-t1-latest` (deep reasoning), `hunyuan-turbo-latest` (fast), `hunyuan-pro` (high quality)
-
 ### llama.cpp Server Notes
 
 - Provider ID: `llamacpp` (alias: `llama.cpp`)
@@ -181,25 +172,6 @@ Behavior:
 - `false`: sends `think: false` to Ollama `/api/chat` requests.
 - `true`: sends `think: true`.
 - Unset: omits `think` and keeps Ollama/model defaults.
-
-### Ollama Vision Override
-
-Some Ollama models support vision (e.g. `llava`, `llama3.2-vision`) while others do not.
-Since ZeroClaw cannot auto-detect this, you can override it in `config.toml`:
-
-```toml
-default_provider = "ollama"
-default_model = "llava"
-model_support_vision = true
-```
-
-Behavior:
-
-- `true`: enables image attachment processing in the agent loop.
-- `false`: disables vision even if the provider reports support.
-- Unset: uses the provider's built-in default.
-
-Environment override: `ZEROCLAW_MODEL_SUPPORT_VISION=true`
 
 ### Kimi Code Notes
 
@@ -292,7 +264,6 @@ You can route model calls by hint using `[[model_routes]]`:
 hint = "reasoning"
 provider = "openrouter"
 model = "anthropic/claude-opus-4-20250514"
-max_tokens = 8192
 
 [[model_routes]]
 hint = "fast"
