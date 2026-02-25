@@ -5478,6 +5478,7 @@ default_temperature = 0.7
             hardware: HardwareConfig::default(),
             transcription: TranscriptionConfig::default(),
             agents_ipc: AgentsIpcConfig::default(),
+            plugins: PluginsConfig::default(),
         };
 
         let toml_str = toml::to_string_pretty(&config).unwrap();
@@ -5662,6 +5663,7 @@ tool_dispatcher = "xml"
             hardware: HardwareConfig::default(),
             transcription: TranscriptionConfig::default(),
             agents_ipc: AgentsIpcConfig::default(),
+            plugins: PluginsConfig::default(),
         };
 
         config.save().await.unwrap();

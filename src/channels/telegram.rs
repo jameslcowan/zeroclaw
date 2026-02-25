@@ -109,6 +109,7 @@ fn pick_uniform_index(len: usize) -> usize {
     loop {
         let value = rand::random::<u64>();
         if value < reject_threshold {
+            // Cast is safe: value % upper is always < upper, and upper <= usize::MAX on supported platforms
             return (value % upper) as usize;
         }
     }
@@ -1506,6 +1507,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
     /// Telegram HTML supports: <b>, <i>, <u>, <s>, <code>, <pre>, <a href="...">
     /// This mirrors OpenClaw's markdownToTelegramHtml approach.
     fn markdown_to_telegram_html(text: &str) -> String {
+        use std::fmt::Write;
         let lines: Vec<&str> = text.split('\n').collect();
         let mut result_lines: Vec<String> = Vec::new();
 
@@ -1539,7 +1541,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                 if i + 1 < len && bytes[i] == b'*' && bytes[i + 1] == b'*' {
                     if let Some(end) = line[i + 2..].find("**") {
                         let inner = Self::escape_html(&line[i + 2..i + 2 + end]);
-                        line_out.push_str(&format!("<b>{inner}</b>"));
+                        write!(line_out, "<b>{inner}</b>").unwrap();
                         i += 4 + end;
                         continue;
                     }
@@ -1547,7 +1549,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                 if i + 1 < len && bytes[i] == b'_' && bytes[i + 1] == b'_' {
                     if let Some(end) = line[i + 2..].find("__") {
                         let inner = Self::escape_html(&line[i + 2..i + 2 + end]);
-                        line_out.push_str(&format!("<b>{inner}</b>"));
+                        write!(line_out, "<b>{inner}</b>").unwrap();
                         i += 4 + end;
                         continue;
                     }
@@ -1557,7 +1559,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                     if let Some(end) = line[i + 1..].find('*') {
                         if end > 0 {
                             let inner = Self::escape_html(&line[i + 1..i + 1 + end]);
-                            line_out.push_str(&format!("<i>{inner}</i>"));
+                            write!(line_out, "<i>{inner}</i>").unwrap();
                             i += 2 + end;
                             continue;
                         }
@@ -1567,7 +1569,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                 if bytes[i] == b'`' && (i == 0 || bytes[i - 1] != b'`') {
                     if let Some(end) = line[i + 1..].find('`') {
                         let inner = Self::escape_html(&line[i + 1..i + 1 + end]);
-                        line_out.push_str(&format!("<code>{inner}</code>"));
+                        write!(line_out, "<code>{inner}</code>").unwrap();
                         i += 2 + end;
                         continue;
                     }
@@ -1583,9 +1585,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                                 if url.starts_with("http://") || url.starts_with("https://") {
                                     let text_html = Self::escape_html(text_part);
                                     let url_html = Self::escape_html(url);
-                                    line_out.push_str(&format!(
-                                        "<a href=\"{url_html}\">{text_html}</a>"
-                                    ));
+                                    write!(line_out, "<a href=\"{url_html}\">{text_html}</a>").unwrap();
                                     i = after_bracket + 1 + paren_end + 1;
                                     continue;
                                 }
@@ -1597,7 +1597,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                 if i + 1 < len && bytes[i] == b'~' && bytes[i + 1] == b'~' {
                     if let Some(end) = line[i + 2..].find("~~") {
                         let inner = Self::escape_html(&line[i + 2..i + 2 + end]);
-                        line_out.push_str(&format!("<s>{inner}</s>"));
+                        write!(line_out, "<s>{inner}</s>").unwrap();
                         i += 4 + end;
                         continue;
                     }

@@ -1511,6 +1511,7 @@ fn pick_uniform_index(len: usize) -> usize {
     loop {
         let value = rand::random::<u64>();
         if value < reject_threshold {
+            // Cast is safe: value % upper is always < upper, and upper <= usize::MAX on supported platforms
             return (value % upper) as usize;
         }
     }

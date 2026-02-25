@@ -370,6 +370,7 @@ fn pick_uniform_index(len: usize) -> usize {
     loop {
         let value = rand::random::<u64>();
         if value < reject_threshold {
+            // Cast is safe: value % upper is always < upper, and upper <= usize::MAX on supported platforms
             return (value % upper) as usize;
         }
     }
@@ -385,13 +386,14 @@ fn random_discord_ack_reaction() -> &'static str {
 /// but they must be percent-encoded per RFC 3986. Custom guild emojis use
 /// the `name:id` format and are passed through unencoded.
 fn encode_emoji_for_discord(emoji: &str) -> String {
+    use std::fmt::Write;
     if emoji.contains(':') {
         return emoji.to_string();
     }
 
     let mut encoded = String::new();
     for byte in emoji.as_bytes() {
-        encoded.push_str(&format!("%{byte:02X}"));
+        write!(encoded, "%{byte:02X}").unwrap();
     }
     encoded
 }
