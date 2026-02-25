@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use directories::UserDirs;
 use parking_lot::Mutex;
 use reqwest::multipart::{Form, Part};
-use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -110,7 +109,6 @@ fn pick_uniform_index(len: usize) -> usize {
     loop {
         let value = rand::random::<u64>();
         if value < reject_threshold {
-            #[allow(clippy::cast_possible_truncation)]
             return (value % upper) as usize;
         }
     }
@@ -394,7 +392,9 @@ impl TelegramChannel {
     /// Override the Telegram Bot API base URL.
     /// Useful for local Bot API servers or testing.
     pub fn with_api_base(mut self, api_base: String) -> Self {
-        self.api_base = api_base;
+        if let Some(normalized) = Self::normalize_api_base(&api_base) {
+            self.api_base = normalized;
+        }
         self
     }
 
@@ -438,9 +438,8 @@ impl TelegramChannel {
             let response = match client.post(&url).json(&body).send().await {
                 Ok(resp) => resp,
                 Err(err) => {
-                    let sanitized = TelegramChannel::sanitize_telegram_error(&err.to_string());
                     tracing::warn!(
-                        "Telegram: failed to add ACK reaction to chat_id={chat_id}, message_id={message_id}: {sanitized}"
+                        "Telegram: failed to add ACK reaction to chat_id={chat_id}, message_id={message_id}: {err}"
                     );
                     return;
                 }
@@ -449,9 +448,8 @@ impl TelegramChannel {
             if !response.status().is_success() {
                 let status = response.status();
                 let err_body = response.text().await.unwrap_or_default();
-                let sanitized = TelegramChannel::sanitize_telegram_error(&err_body);
                 tracing::warn!(
-                    "Telegram: add ACK reaction failed for chat_id={chat_id}, message_id={message_id}: status={status}, body={sanitized}"
+                    "Telegram: add ACK reaction failed for chat_id={chat_id}, message_id={message_id}: status={status}, body={err_body}"
                 );
             }
         });
@@ -459,10 +457,6 @@ impl TelegramChannel {
 
     fn http_client(&self) -> reqwest::Client {
         crate::config::build_runtime_proxy_client("channel.telegram")
-    }
-
-    fn sanitize_telegram_error(input: &str) -> String {
-        crate::providers::sanitize_api_error(input)
     }
 
     fn normalize_identity(value: &str) -> String {
@@ -552,6 +546,19 @@ impl TelegramChannel {
 
     fn api_url(&self, method: &str) -> String {
         format!("{}/bot{}/{method}", self.api_base, self.bot_token)
+    }
+
+    fn file_url(&self, file_path: &str) -> String {
+        let trimmed = file_path.trim_start_matches('/');
+        format!("{}/file/bot{}/{}", self.api_base, self.bot_token, trimmed)
+    }
+
+    fn normalize_api_base(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(trimmed.trim_end_matches('/').to_string())
     }
 
     async fn fetch_bot_username(&self) -> anyhow::Result<String> {
@@ -862,10 +869,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
     /// Download a file from the Telegram CDN.
     async fn download_file(&self, file_path: &str) -> anyhow::Result<Vec<u8>> {
-        let url = format!(
-            "https://api.telegram.org/file/bot{}/{file_path}",
-            self.bot_token
-        );
+        let url = self.file_url(file_path);
         let resp = self
             .http_client()
             .get(&url)
@@ -1066,21 +1070,6 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             return None;
         }
 
-        // Check mention_only for group messages (apply to caption for attachments)
-        let is_group = Self::is_group_message(message);
-        if self.mention_only && is_group {
-            let bot_username = self.bot_username.lock();
-            if let Some(ref bot_username) = *bot_username {
-                let text_to_check = attachment.caption.as_deref().unwrap_or("");
-                if !Self::contains_bot_mention(text_to_check, bot_username) {
-                    return None;
-                }
-            } else {
-                // Bot username unknown, can't verify mention
-                return None;
-            }
-        }
-
         let chat_id = message
             .get("chat")
             .and_then(|chat| chat.get("id"))
@@ -1229,13 +1218,6 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                     .map(|u| u.iter().cloned().collect::<Vec<_>>())
                     .unwrap_or_default()
             );
-            return None;
-        }
-
-        // Voice messages have no text to mention the bot, so ignore in mention_only mode when in groups.
-        // Private chats are always processed.
-        let is_group = Self::is_group_message(message);
-        if self.mention_only && is_group {
             return None;
         }
 
@@ -1426,7 +1408,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         if self.mention_only && is_group {
             let bot_username = self.bot_username.lock();
             if let Some(ref bot_username) = *bot_username {
-                if !Self::contains_bot_mention(text, bot_username) {
+                if !Self::contains_bot_mention(&text, bot_username) {
                     return None;
                 }
             } else {
@@ -1461,7 +1443,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         let content = if self.mention_only && is_group {
             let bot_username = self.bot_username.lock();
             let bot_username = bot_username.as_ref()?;
-            Self::normalize_incoming_content(text, bot_username)?
+            Self::normalize_incoming_content(&text, bot_username)?
         } else {
             text.to_string()
         };
@@ -1502,10 +1484,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             .to_string();
 
         // Step 2: download the actual file
-        let download_url = format!(
-            "https://api.telegram.org/file/bot{}/{}",
-            self.bot_token, file_path
-        );
+        let download_url = self.file_url(&file_path);
         let img_resp = self.http_client().get(&download_url).send().await?;
         let bytes = img_resp.bytes().await?;
 
@@ -1569,7 +1548,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                 if i + 1 < len && bytes[i] == b'*' && bytes[i + 1] == b'*' {
                     if let Some(end) = line[i + 2..].find("**") {
                         let inner = Self::escape_html(&line[i + 2..i + 2 + end]);
-                        write!(line_out, "<b>{inner}</b>").unwrap();
+                        line_out.push_str(&format!("<b>{inner}</b>"));
                         i += 4 + end;
                         continue;
                     }
@@ -1577,7 +1556,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                 if i + 1 < len && bytes[i] == b'_' && bytes[i + 1] == b'_' {
                     if let Some(end) = line[i + 2..].find("__") {
                         let inner = Self::escape_html(&line[i + 2..i + 2 + end]);
-                        write!(line_out, "<b>{inner}</b>").unwrap();
+                        line_out.push_str(&format!("<b>{inner}</b>"));
                         i += 4 + end;
                         continue;
                     }
@@ -1587,7 +1566,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                     if let Some(end) = line[i + 1..].find('*') {
                         if end > 0 {
                             let inner = Self::escape_html(&line[i + 1..i + 1 + end]);
-                            write!(line_out, "<i>{inner}</i>").unwrap();
+                            line_out.push_str(&format!("<i>{inner}</i>"));
                             i += 2 + end;
                             continue;
                         }
@@ -1597,7 +1576,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                 if bytes[i] == b'`' && (i == 0 || bytes[i - 1] != b'`') {
                     if let Some(end) = line[i + 1..].find('`') {
                         let inner = Self::escape_html(&line[i + 1..i + 1 + end]);
-                        write!(line_out, "<code>{inner}</code>").unwrap();
+                        line_out.push_str(&format!("<code>{inner}</code>"));
                         i += 2 + end;
                         continue;
                     }
@@ -1613,8 +1592,9 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                                 if url.starts_with("http://") || url.starts_with("https://") {
                                     let text_html = Self::escape_html(text_part);
                                     let url_html = Self::escape_html(url);
-                                    write!(line_out, "<a href=\"{url_html}\">{text_html}</a>")
-                                        .unwrap();
+                                    line_out.push_str(&format!(
+                                        "<a href=\"{url_html}\">{text_html}</a>"
+                                    ));
                                     i = after_bracket + 1 + paren_end + 1;
                                     continue;
                                 }
@@ -1626,7 +1606,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                 if i + 1 < len && bytes[i] == b'~' && bytes[i + 1] == b'~' {
                     if let Some(end) = line[i + 2..].find("~~") {
                         let inner = Self::escape_html(&line[i + 2..i + 2 + end]);
-                        write!(line_out, "<s>{inner}</s>").unwrap();
+                        line_out.push_str(&format!("<s>{inner}</s>"));
                         i += 4 + end;
                         continue;
                     }
@@ -1655,14 +1635,14 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         for line in joined.split('\n') {
             let trimmed = line.trim();
             if trimmed.starts_with("```") {
-                if in_code_block {
+                if !in_code_block {
+                    in_code_block = true;
+                    code_buf.clear();
+                } else {
                     in_code_block = false;
                     let escaped = code_buf.trim_end_matches('\n');
                     // Telegram HTML parse mode supports <pre> and <code>, but not class attributes.
-                    writeln!(final_out, "<pre><code>{escaped}</code></pre>").unwrap();
-                    code_buf.clear();
-                } else {
-                    in_code_block = true;
+                    final_out.push_str(&format!("<pre><code>{escaped}</code></pre>\n"));
                     code_buf.clear();
                 }
             } else if in_code_block {
@@ -1674,7 +1654,10 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             }
         }
         if in_code_block && !code_buf.is_empty() {
-            writeln!(final_out, "<pre><code>{}</code></pre>", code_buf.trim_end()).unwrap();
+            final_out.push_str(&format!(
+                "<pre><code>{}</code></pre>\n",
+                code_buf.trim_end()
+            ));
         }
 
         final_out.trim_end_matches('\n').to_string()
@@ -1760,14 +1743,12 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             if !plain_resp.status().is_success() {
                 let plain_status = plain_resp.status();
                 let plain_err = plain_resp.text().await.unwrap_or_default();
-                let sanitized_markdown_err = Self::sanitize_telegram_error(&markdown_err);
-                let sanitized_plain_err = Self::sanitize_telegram_error(&plain_err);
                 anyhow::bail!(
                     "Telegram sendMessage failed (markdown {}: {}; plain {}: {})",
                     markdown_status,
-                    sanitized_markdown_err,
+                    markdown_err,
                     plain_status,
-                    sanitized_plain_err
+                    plain_err
                 );
             }
 
@@ -1810,8 +1791,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
-            let sanitized = Self::sanitize_telegram_error(&err);
-            anyhow::bail!("Telegram {method} by URL failed: {sanitized}");
+            anyhow::bail!("Telegram {method} by URL failed: {err}");
         }
 
         tracing::info!("Telegram {method} sent to {chat_id}: {url}");
@@ -1942,8 +1922,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
-            let sanitized = Self::sanitize_telegram_error(&err);
-            anyhow::bail!("Telegram sendDocument failed: {sanitized}");
+            anyhow::bail!("Telegram sendDocument failed: {err}");
         }
 
         tracing::info!("Telegram document sent to {chat_id}: {file_name}");
@@ -1982,8 +1961,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
-            let sanitized = Self::sanitize_telegram_error(&err);
-            anyhow::bail!("Telegram sendDocument failed: {sanitized}");
+            anyhow::bail!("Telegram sendDocument failed: {err}");
         }
 
         tracing::info!("Telegram document sent to {chat_id}: {file_name}");
@@ -2027,8 +2005,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
-            let sanitized = Self::sanitize_telegram_error(&err);
-            anyhow::bail!("Telegram sendPhoto failed: {sanitized}");
+            anyhow::bail!("Telegram sendPhoto failed: {err}");
         }
 
         tracing::info!("Telegram photo sent to {chat_id}: {file_name}");
@@ -2067,8 +2044,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
-            let sanitized = Self::sanitize_telegram_error(&err);
-            anyhow::bail!("Telegram sendPhoto failed: {sanitized}");
+            anyhow::bail!("Telegram sendPhoto failed: {err}");
         }
 
         tracing::info!("Telegram photo sent to {chat_id}: {file_name}");
@@ -2112,8 +2088,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
-            let sanitized = Self::sanitize_telegram_error(&err);
-            anyhow::bail!("Telegram sendVideo failed: {sanitized}");
+            anyhow::bail!("Telegram sendVideo failed: {err}");
         }
 
         tracing::info!("Telegram video sent to {chat_id}: {file_name}");
@@ -2157,8 +2132,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
-            let sanitized = Self::sanitize_telegram_error(&err);
-            anyhow::bail!("Telegram sendAudio failed: {sanitized}");
+            anyhow::bail!("Telegram sendAudio failed: {err}");
         }
 
         tracing::info!("Telegram audio sent to {chat_id}: {file_name}");
@@ -2202,8 +2176,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
-            let sanitized = Self::sanitize_telegram_error(&err);
-            anyhow::bail!("Telegram sendVoice failed: {sanitized}");
+            anyhow::bail!("Telegram sendVoice failed: {err}");
         }
 
         tracing::info!("Telegram voice sent to {chat_id}: {file_name}");
@@ -2240,8 +2213,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
-            let sanitized = Self::sanitize_telegram_error(&err);
-            anyhow::bail!("Telegram sendDocument by URL failed: {sanitized}");
+            anyhow::bail!("Telegram sendDocument by URL failed: {err}");
         }
 
         tracing::info!("Telegram document (URL) sent to {chat_id}: {url}");
@@ -2278,8 +2250,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
         if !resp.status().is_success() {
             let err = resp.text().await?;
-            let sanitized = Self::sanitize_telegram_error(&err);
-            anyhow::bail!("Telegram sendPhoto by URL failed: {sanitized}");
+            anyhow::bail!("Telegram sendPhoto by URL failed: {err}");
         }
 
         tracing::info!("Telegram photo (URL) sent to {chat_id}: {url}");
@@ -2362,8 +2333,7 @@ impl Channel for TelegramChannel {
 
         if !resp.status().is_success() {
             let err = resp.text().await.unwrap_or_default();
-            let sanitized = Self::sanitize_telegram_error(&err);
-            anyhow::bail!("Telegram sendMessage (draft) failed: {sanitized}");
+            anyhow::bail!("Telegram sendMessage (draft) failed: {err}");
         }
 
         let resp_json: serde_json::Value = resp.json().await?;
@@ -2442,8 +2412,7 @@ impl Channel for TelegramChannel {
         } else {
             let status = resp.status();
             let err = resp.text().await.unwrap_or_default();
-            let sanitized = Self::sanitize_telegram_error(&err);
-            tracing::debug!("Telegram editMessageText failed ({status}): {sanitized}");
+            tracing::debug!("Telegram editMessageText failed ({status}): {err}");
         }
 
         Ok(())
@@ -2598,8 +2567,7 @@ impl Channel for TelegramChannel {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            let sanitized = Self::sanitize_telegram_error(&body);
-            tracing::debug!("Telegram deleteMessage failed ({status}): {sanitized}");
+            tracing::debug!("Telegram deleteMessage failed ({status}): {body}");
         }
 
         Ok(())
@@ -2662,16 +2630,14 @@ impl Channel for TelegramChannel {
             });
             match self.http_client().post(&url).json(&probe).send().await {
                 Err(e) => {
-                    let sanitized = Self::sanitize_telegram_error(&e.to_string());
-                    tracing::warn!("Telegram startup probe error: {sanitized}; retrying in 5s");
+                    tracing::warn!("Telegram startup probe error: {e}; retrying in 5s");
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
                 Ok(resp) => {
                     match resp.json::<serde_json::Value>().await {
                         Err(e) => {
-                            let sanitized = Self::sanitize_telegram_error(&e.to_string());
                             tracing::warn!(
-                                "Telegram startup probe parse error: {sanitized}; retrying in 5s"
+                                "Telegram startup probe parse error: {e}; retrying in 5s"
                             );
                             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         }
@@ -2739,8 +2705,7 @@ impl Channel for TelegramChannel {
             let resp = match self.http_client().post(&url).json(&body).send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    let sanitized = Self::sanitize_telegram_error(&e.to_string());
-                    tracing::warn!("Telegram poll error: {sanitized}");
+                    tracing::warn!("Telegram poll error: {e}");
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     continue;
                 }
@@ -2749,8 +2714,7 @@ impl Channel for TelegramChannel {
             let data: serde_json::Value = match resp.json().await {
                 Ok(d) => d,
                 Err(e) => {
-                    let sanitized = Self::sanitize_telegram_error(&e.to_string());
-                    tracing::warn!("Telegram parse error: {sanitized}");
+                    tracing::warn!("Telegram parse error: {e}");
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     continue;
                 }
@@ -2847,8 +2811,7 @@ Ensure only one `zeroclaw` process is using this bot token."
         {
             Ok(Ok(resp)) => resp.status().is_success(),
             Ok(Err(e)) => {
-                let sanitized = Self::sanitize_telegram_error(&e.to_string());
-                tracing::debug!("Telegram health check failed: {sanitized}");
+                tracing::debug!("Telegram health check failed: {e}");
                 false
             }
             Err(_) => {
@@ -2925,7 +2888,7 @@ mod tests {
             "update_id": 1,
             "message": {
                 "message_id": 99,
-                "chat": { "id": -100_123_456 }
+                "chat": { "id": -100123456 }
             }
         });
 
@@ -3043,6 +3006,20 @@ mod tests {
         assert_eq!(
             ch.api_url("getMe"),
             "https://api.telegram.org/bot123:ABC/getMe"
+        );
+    }
+
+    #[test]
+    fn telegram_api_url_custom_base_trims_slash() {
+        let ch = TelegramChannel::new("123:ABC".into(), vec![], false)
+            .with_api_base("https://tapi.bale.ai/".into());
+        assert_eq!(
+            ch.api_url("getMe"),
+            "https://tapi.bale.ai/bot123:ABC/getMe"
+        );
+        assert_eq!(
+            ch.file_url("files/photo.jpg"),
+            "https://tapi.bale.ai/file/bot123:ABC/files/photo.jpg"
         );
     }
 
@@ -4040,10 +4017,7 @@ mod tests {
 
     #[test]
     fn telegram_split_many_short_lines() {
-        let msg: String = (0..1000)
-            .map(|i| format!("line {i}\n"))
-            .collect::<Vec<_>>()
-            .concat();
+        let msg: String = (0..1000).map(|i| format!("line {i}\n")).collect();
         let parts = split_message_for_telegram(&msg);
         for part in &parts {
             assert!(
@@ -4396,7 +4370,7 @@ mod tests {
     /// Skipped automatically when `GROQ_API_KEY` is not set.
     /// Run: `GROQ_API_KEY=<key> cargo test --lib -- telegram::tests::e2e_live_voice_transcription_and_reply_cache --ignored`
     #[tokio::test]
-    #[ignore = "requires GROQ_API_KEY"]
+    #[ignore]
     async fn e2e_live_voice_transcription_and_reply_cache() {
         if std::env::var("GROQ_API_KEY").is_err() {
             eprintln!("GROQ_API_KEY not set — skipping live voice transcription test");
@@ -4847,7 +4821,7 @@ mod tests {
 
         let groq = OpenAiCompatibleProvider::new(
             "Groq",
-            "https://api.groq.com/openai/v1",
+            "https://api.groq.com/openai",
             Some("fake_key"),
             AuthStyle::Bearer,
         );

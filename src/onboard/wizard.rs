@@ -137,7 +137,6 @@ pub async fn run_wizard(force: bool) -> Result<Config> {
         provider_api: None,
         default_model: Some(model),
         model_providers: std::collections::HashMap::new(),
-        provider: crate::config::ProviderConfig::default(),
         default_temperature: 0.7,
         observability: ObservabilityConfig::default(),
         autonomy: AutonomyConfig::default(),
@@ -493,7 +492,6 @@ async fn run_quick_setup_with_home(
         provider_api: None,
         default_model: Some(model.clone()),
         model_providers: std::collections::HashMap::new(),
-        provider: crate::config::ProviderConfig::default(),
         default_temperature: 0.7,
         observability: ObservabilityConfig::default(),
         autonomy: AutonomyConfig::default(),
@@ -2030,7 +2028,7 @@ fn resolve_interactive_onboarding_mode(
             "  Existing config found at {}. Select setup mode",
             config_path.display()
         ))
-        .items(options)
+        .items(&options)
         .default(1)
         .interact()?;
 
@@ -3227,7 +3225,6 @@ fn setup_project_context() -> Result<ProjectContext> {
         "Europe/London (GMT/BST)",
         "Europe/Berlin (CET/CEST)",
         "Asia/Tokyo (JST)",
-        "Asia/Shanghai (CST)",
         "UTC",
         "Other (type manually)",
     ];
@@ -3630,6 +3627,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
 
                 config.telegram = Some(TelegramConfig {
                     bot_token: token,
+                    base_url: None,
                     allowed_users,
                     stream_mode: StreamMode::default(),
                     draft_update_interval_ms: 1000,
@@ -5866,7 +5864,7 @@ mod tests {
         apply_provider_update(
             &mut config,
             "anthropic".to_string(),
-            String::new(),
+            "".to_string(),
             "claude-sonnet-4-5-20250929".to_string(),
             None,
         );
