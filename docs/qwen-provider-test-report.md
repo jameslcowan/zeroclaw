@@ -69,6 +69,7 @@ Qwen OAuth integration has been successfully validated and configured for ZeroCl
 - Iterations: 3
 
 **Results:**
+
 | Request | Time (seconds) | Status |
 |---------|----------------|--------|
 | 1       | 2.635          | ✅     |
@@ -107,6 +108,7 @@ fallback_providers = [
 ### 4.2 Basic Functionality Tests
 
 #### Test 4.2.1: Code Generation
+
 **Command:**
 ```bash
 cargo run --release -- agent -p qwen-code --model qwen3-coder-plus \
@@ -131,6 +133,7 @@ fn fibonacci(n: u32) -> u64 {
 ```
 
 #### Test 4.2.2: Tool Usage Awareness
+
 **Command:**
 ```bash
 cargo run --release -- agent -p qwen-code --model qwen3-coder-plus \
@@ -143,6 +146,7 @@ cargo run --release -- agent -p qwen-code --model qwen3-coder-plus \
 - Shows proper tool awareness and usage intent
 
 #### Test 4.2.3: Quota Tracking
+
 **Command:**
 ```bash
 cargo run --release -- providers-quota --provider qwen-code
@@ -159,11 +163,13 @@ cargo run --release -- providers-quota --provider qwen-code
 ## 5. Integration Issues Found
 
 ### 5.1 Critical Issues
+
 **None** - All core functionality works as expected.
 
 ### 5.2 Minor Issues
 
 #### Issue #1: Config Model Override Not Working
+
 **Description:** Setting `model = "qwen-plus"` in config was not validated at load time.
 
 **Impact:** Low - Invalid model is caught at first API call with clear error.
@@ -174,6 +180,7 @@ cargo run --release -- providers-quota --provider qwen-code
 - **Status:** ✅ FIXED
 
 #### Issue #2: Quota Tracking Not Implemented
+
 **Description:** `providers-quota --provider qwen-code` returned empty.
 
 **Impact:** Medium - Manual quota tracking required.
@@ -191,6 +198,7 @@ cargo run --release -- providers-quota --provider qwen-code
 - Remaining: `?` (unknown without local tracking)
 
 #### Issue #3: Default Model Override
+
 **Description:** When using `-p qwen-code`, the global `default_model` overrides provider-specific model unless `--model` is explicitly passed.
 
 **Impact:** Medium - Requires explicit `--model qwen3-coder-plus` flag.
@@ -204,6 +212,7 @@ cargo run --release -- providers-quota --provider qwen-code
 ## 6. OAuth Token Management
 
 ### 6.1 OAuth Credentials
+
 **Location:** `~/.qwen/oauth_creds.json`
 
 **Structure:**
@@ -218,6 +227,7 @@ cargo run --release -- providers-quota --provider qwen-code
 ```
 
 ### 6.2 Token Refresh
+
 **Status:** ✅ **Assumed Working** (not explicitly tested)
 
 **Mechanism:**
@@ -313,6 +323,7 @@ cargo run --release -- agent -m "<prompt>"
 ## 10. Success Criteria Summary
 
 ### Must Pass ✅
+
 - [x] At least 1 Qwen model confirmed working via OAuth
 - [x] Basic functionality tests pass (code generation)
 - [ ] Quota tracking works correctly *(deferred - manual tracking OK)*
@@ -320,12 +331,14 @@ cargo run --release -- agent -m "<prompt>"
 - [x] Configuration documented
 
 ### Should Pass ✅
+
 - [ ] Fallback mechanism works *(not tested - low priority)*
 - [ ] Error handling tested *(not tested - low priority)*
 - [x] Performance benchmarks completed
 - [ ] Comparative analysis done *(deferred)*
 
 ### Nice to Have ⚠️
+
 - [ ] Multiple models available *(only 1 available via OAuth)*
 - [x] Context window ≥ 32K
 - [x] Latency < 3s average
@@ -364,18 +377,21 @@ cd /home/spex/work/erp/zeroclaws
 ## 12. Next Steps
 
 ### Immediate (Completed)
+
 - [x] Update config with correct model (`qwen3-coder-plus`)
 - [x] Add Qwen to fallback providers
 - [x] Document OAuth setup
 - [x] Create test report
 
 ### Short-term (Recommended)
+
 - [ ] Implement OAuth quota adapter for better tracking
 - [ ] Test token refresh mechanism explicitly
 - [ ] Add model validation at config load time
 - [ ] Fix provider model override behavior
 
 ### Long-term (Optional)
+
 - [ ] Monitor Qwen API for new model availability
 - [ ] Conduct full comparative analysis (Qwen vs Gemini vs OpenAI)
 - [ ] Test vision capabilities (if added to qwen3-coder-plus)
@@ -407,6 +423,7 @@ If issues arise with Qwen integration:
 ## Appendix A: Test Logs
 
 ### Model Probing Results
+
 ```csv
 Model,Status,Response
 qwen3-coder-plus,SUCCESS,"Hello! How can I "
@@ -416,6 +433,7 @@ qwen3-plus,FAILED,"model `qwen3-plus` is not supported."
 ```
 
 ### Context Window Results
+
 ```
 Testing 1024 tokens ... ✅ OK (actual: 828 prompt + 10 completion tokens)
 Testing 2048 tokens ... ✅ OK (actual: 1647 prompt + 10 completion tokens)
@@ -427,6 +445,7 @@ Testing 65536 tokens ... ❌ FAILED (BrokenPipe)
 ```
 
 ### Latency Results
+
 ```
 Request 1: 2.635s
 Request 2: 3.164s
