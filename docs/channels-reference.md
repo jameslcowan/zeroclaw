@@ -152,6 +152,7 @@ Field names differ by channel:
 [channels_config.telegram]
 bot_token = "123456:telegram-token"
 allowed_users = ["*"]
+base_url = "https://api.telegram.org" # optional: set to https://tapi.bale.ai for Bale
 stream_mode = "off"               # optional: off | partial
 draft_update_interval_ms = 1000   # optional: edit throttle for partial streaming
 mention_only = false              # optional: require @mention in groups
@@ -162,6 +163,7 @@ Telegram notes:
 
 - `interrupt_on_new_message = true` preserves interrupted user turns in conversation history, then restarts generation on the newest message.
 - Interruption scope is strict: same sender in the same chat. Messages from different chats are processed independently.
+- `base_url` defaults to `https://api.telegram.org`; set to `https://tapi.bale.ai` to use Bale's Telegram-compatible API.
 
 ### 4.2 Discord
 
@@ -309,8 +311,8 @@ verify_tls = true
 
 ```toml
 [channels_config.lark]
-app_id = "your_lark_app_id"
-app_secret = "your_lark_app_secret"
+app_id = "cli_xxx"
+app_secret = "xxx"
 encrypt_key = ""                    # optional
 verification_token = ""             # optional
 allowed_users = ["*"]
@@ -324,8 +326,8 @@ port = 8081                          # required for webhook mode
 
 ```toml
 [channels_config.feishu]
-app_id = "your_lark_app_id"
-app_secret = "your_lark_app_secret"
+app_id = "cli_xxx"
+app_secret = "xxx"
 encrypt_key = ""                    # optional
 verification_token = ""             # optional
 allowed_users = ["*"]

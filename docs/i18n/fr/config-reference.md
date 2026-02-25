@@ -19,4 +19,4 @@ Source anglaise:
 
 ## Notes de mise à jour
 
-- Ajout de `provider.reasoning_level` (OpenAI Codex `/responses`). Voir la source anglaise pour les détails.
+- Ajout de `channels_config.telegram.base_url` pour utiliser une API Telegram-compatible (ex. Bale). Voir la source anglaise pour les détails.

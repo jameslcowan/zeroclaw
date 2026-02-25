@@ -12,16 +12,15 @@ pub use schema::{
     HardwareTransport, HeartbeatConfig, HooksConfig, HttpRequestConfig, IMessageConfig,
     IdentityConfig, LarkConfig, MatrixConfig, MemoryConfig, ModelRouteConfig, MultimodalConfig,
     NextcloudTalkConfig, ObservabilityConfig, OtpConfig, OtpMethod, PeripheralBoardConfig,
-    PeripheralsConfig, ProviderConfig, ProxyConfig, ProxyScope, QdrantConfig,
-    QueryClassificationConfig, ReliabilityConfig, ResearchPhaseConfig, ResearchTrigger,
-    ResourceLimitsConfig, RuntimeConfig, SandboxBackend, SandboxConfig, SchedulerConfig,
-    SecretsConfig, SecurityConfig, SkillsConfig, SkillsPromptInjectionMode, SlackConfig,
-    StorageConfig, StorageProviderConfig, StorageProviderSection, StreamMode, SyscallAnomalyConfig,
-    TelegramConfig, TranscriptionConfig, TunnelConfig, WasmCapabilityEscalationMode,
-    WasmRuntimeConfig, WasmSecurityConfig, WebFetchConfig, WebSearchConfig, WebhookConfig,
+    PeripheralsConfig, ProxyConfig, ProxyScope, QdrantConfig, QueryClassificationConfig,
+    ReliabilityConfig, ResearchPhaseConfig, ResearchTrigger, ResourceLimitsConfig, RuntimeConfig,
+    SandboxBackend, SandboxConfig, SchedulerConfig, SecretsConfig, SecurityConfig, SkillsConfig,
+    SkillsPromptInjectionMode, SlackConfig, StorageConfig, StorageProviderConfig,
+    StorageProviderSection, StreamMode, TelegramConfig, TranscriptionConfig, TunnelConfig,
+    WebFetchConfig, WebSearchConfig, WebhookConfig,
 };
 
-pub fn name_and_presence<T: traits::ChannelConfig>(channel: Option<&T>) -> (&'static str, bool) {
+pub fn name_and_presence<T: traits::ChannelConfig>(channel: &Option<T>) -> (&'static str, bool) {
     (T::name(), channel.is_some())
 }
 
@@ -42,6 +41,7 @@ mod tests {
     fn reexported_channel_configs_are_constructible() {
         let telegram = TelegramConfig {
             bot_token: "token".into(),
+            base_url: None,
             allowed_users: vec!["alice".into()],
             stream_mode: StreamMode::default(),
             draft_update_interval_ms: 1000,

@@ -399,6 +399,7 @@ mod tests {
         let mut config = Config::default();
         config.channels_config.telegram = Some(crate::config::TelegramConfig {
             bot_token: "token".into(),
+            base_url: None,
             allowed_users: vec![],
             stream_mode: crate::config::StreamMode::default(),
             draft_update_interval_ms: 1000,
@@ -532,6 +533,7 @@ mod tests {
         config.heartbeat.to = Some("123456".into());
         config.channels_config.telegram = Some(crate::config::TelegramConfig {
             bot_token: "bot-token".into(),
+            base_url: None,
             allowed_users: vec![],
             stream_mode: crate::config::StreamMode::default(),
             draft_update_interval_ms: 1000,

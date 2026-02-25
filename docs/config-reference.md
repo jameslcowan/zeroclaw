@@ -2,7 +2,7 @@
 
 This is a high-signal reference for common config sections and defaults.
 
-Last verified: **February 25, 2026**.
+Last verified: **February 21, 2026**.
 
 Config path resolution at startup:
 
@@ -148,42 +148,6 @@ Notes:
 - Corrupted/unreadable estop state falls back to fail-closed `kill_all`.
 - Use CLI command `zeroclaw estop` to engage and `zeroclaw estop resume` to clear levels.
 
-## `[security.syscall_anomaly]`
-
-| Key | Default | Purpose |
-|---|---|---|
-| `enabled` | `true` | Enable syscall anomaly detection over command output telemetry |
-| `strict_mode` | `false` | Emit anomaly when denied syscalls are observed even if in baseline |
-| `alert_on_unknown_syscall` | `true` | Alert on syscall names not present in baseline |
-| `max_denied_events_per_minute` | `5` | Threshold for denied-syscall spike alerts |
-| `max_total_events_per_minute` | `120` | Threshold for total syscall-event spike alerts |
-| `max_alerts_per_minute` | `30` | Global alert budget guardrail per rolling minute |
-| `alert_cooldown_secs` | `20` | Cooldown between identical anomaly alerts |
-| `log_path` | `syscall-anomalies.log` | JSONL anomaly log path |
-| `baseline_syscalls` | built-in allowlist | Expected syscall profile; unknown entries trigger alerts |
-
-Notes:
-
-- Detection consumes seccomp/audit hints from command `stdout`/`stderr`.
-- Numeric syscall IDs in Linux audit lines are mapped to common x86_64 names when available.
-- Alert budget and cooldown reduce duplicate/noisy events during repeated retries.
-- `max_denied_events_per_minute` must be less than or equal to `max_total_events_per_minute`.
-
-Example:
-
-```toml
-[security.syscall_anomaly]
-enabled = true
-strict_mode = false
-alert_on_unknown_syscall = true
-max_denied_events_per_minute = 5
-max_total_events_per_minute = 120
-max_alerts_per_minute = 30
-alert_cooldown_secs = 20
-log_path = "syscall-anomalies.log"
-baseline_syscalls = ["read", "write", "openat", "close", "execve", "futex"]
-```
-
 ## `[agents.<name>]`
 
 Delegate sub-agent configurations. Each key under `[agents]` defines a named sub-agent that the primary agent can delegate to.
@@ -267,7 +231,6 @@ The agent will research the codebase before responding to queries like:
 
 | Key | Default | Purpose |
 |---|---|---|
-| `kind` | `native` | Runtime backend: `native`, `docker`, or `wasm` |
 | `reasoning_enabled` | unset (`None`) | Global reasoning/thinking override for providers that support explicit controls |
 
 Notes:
@@ -275,55 +238,6 @@ Notes:
 - `reasoning_enabled = false` explicitly disables provider-side reasoning for supported providers (currently `ollama`, via request field `think: false`).
 - `reasoning_enabled = true` explicitly requests reasoning for supported providers (`think: true` on `ollama`).
 - Unset keeps provider defaults.
-- Deprecated compatibility alias: `runtime.reasoning_level` is still accepted but should be migrated to `provider.reasoning_level`.
-- `runtime.kind = "wasm"` enables capability-bounded module execution and disables shell/process style execution.
-
-### `[runtime.wasm]`
-
-| Key | Default | Purpose |
-|---|---|---|
-| `tools_dir` | `"tools/wasm"` | Workspace-relative directory containing `.wasm` modules |
-| `fuel_limit` | `1000000` | Instruction budget per module invocation |
-| `memory_limit_mb` | `64` | Per-module memory cap (MB) |
-| `max_module_size_mb` | `50` | Maximum allowed `.wasm` file size (MB) |
-| `allow_workspace_read` | `false` | Allow WASM host calls to read workspace files (future-facing) |
-| `allow_workspace_write` | `false` | Allow WASM host calls to write workspace files (future-facing) |
-| `allowed_hosts` | `[]` | Explicit network host allowlist for WASM host calls (future-facing) |
-
-Notes:
-
-- `allowed_hosts` entries must be normalized `host` or `host:port` strings; wildcards, schemes, and paths are rejected when `runtime.wasm.security.strict_host_validation = true`.
-- Invocation-time capability overrides are controlled by `runtime.wasm.security.capability_escalation_mode`:
-  - `deny` (default): reject escalation above runtime baseline.
-  - `clamp`: reduce requested capabilities to baseline.
-
-### `[runtime.wasm.security]`
-
-| Key | Default | Purpose |
-|---|---|---|
-| `require_workspace_relative_tools_dir` | `true` | Require `runtime.wasm.tools_dir` to be workspace-relative and reject `..` traversal |
-| `reject_symlink_modules` | `true` | Block symlinked `.wasm` module files during execution |
-| `strict_host_validation` | `true` | Fail config/invocation on invalid host entries instead of dropping them |
-| `capability_escalation_mode` | `"deny"` | Escalation policy: `deny` or `clamp` |
-
-WASM profile templates:
-
-- `dev/config.wasm.dev.toml`
-- `dev/config.wasm.staging.toml`
-- `dev/config.wasm.prod.toml`
-
-## `[provider]`
-
-| Key | Default | Purpose |
-|---|---|---|
-| `reasoning_level` | unset (`None`) | Reasoning effort/level override for providers that support explicit levels (currently OpenAI Codex `/responses`) |
-
-Notes:
-
-- Supported values: `minimal`, `low`, `medium`, `high`, `xhigh` (case-insensitive).
-- When set, overrides `ZEROCLAW_CODEX_REASONING_EFFORT` for OpenAI Codex requests.
-- Unset falls back to `ZEROCLAW_CODEX_REASONING_EFFORT` if present, otherwise defaults to `xhigh`.
-- If both `provider.reasoning_level` and deprecated `runtime.reasoning_level` are set, provider-level value wins.
 
 ## `[skills]`
 
@@ -640,6 +554,8 @@ Notes:
 - When a timeout occurs, users receive: `⚠️ Request timed out while waiting for the model. Please try again.`
 - Telegram-only interruption behavior is controlled with `channels_config.telegram.interrupt_on_new_message` (default `false`).
   When enabled, a newer message from the same sender in the same chat cancels the in-flight request and preserves interrupted user context.
+- `channels_config.telegram.base_url` optionally overrides the Telegram Bot API base URL (default: `https://api.telegram.org`).
+  Set to `https://tapi.bale.ai` for Bale's Telegram-compatible API.
 - While `zeroclaw channel start` is running, updates to `default_provider`, `default_model`, `default_temperature`, `api_key`, `api_url`, and `reliability.*` are hot-applied from `config.toml` on the next inbound message.
 
 ### `[channels_config.nostr]`
