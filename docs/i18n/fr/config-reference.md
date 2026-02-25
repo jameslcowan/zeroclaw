@@ -19,5 +19,4 @@ Source anglaise:
 
 ## Notes de mise à jour
 
-- Ajout de `provider.reasoning_level` (OpenAI Codex `/responses`). Voir la source anglaise pour les détails.
-- Valeur par défaut de `agent.max_tool_iterations` augmentée à `20` (fallback sûr si `0`).
+- Ajout de `channels_config.telegram.base_url` pour utiliser une API Telegram-compatible (ex. Bale). Voir la source anglaise pour les détails.

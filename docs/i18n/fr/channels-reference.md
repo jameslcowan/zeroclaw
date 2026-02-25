@@ -16,3 +16,7 @@ Source anglaise:
 
 - Les identifiants de canaux, API paths et config keys restent en anglais.
 - La définition finale est la source anglaise.
+
+## Notes de mise à jour
+
+- Ajout de `channels_config.telegram.base_url` pour un endpoint Telegram-compatible (ex. Bale). Voir la source anglaise pour les détails.

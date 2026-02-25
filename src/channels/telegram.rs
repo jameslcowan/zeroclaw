@@ -365,7 +365,9 @@ impl TelegramChannel {
     /// Override the Telegram Bot API base URL.
     /// Useful for local Bot API servers or testing.
     pub fn with_api_base(mut self, api_base: String) -> Self {
-        self.api_base = api_base;
+        if let Some(normalized) = Self::normalize_api_base(&api_base) {
+            self.api_base = normalized;
+        }
         self
     }
 
@@ -517,6 +519,19 @@ impl TelegramChannel {
 
     fn api_url(&self, method: &str) -> String {
         format!("{}/bot{}/{method}", self.api_base, self.bot_token)
+    }
+
+    fn file_url(&self, file_path: &str) -> String {
+        let trimmed = file_path.trim_start_matches('/');
+        format!("{}/file/bot{}/{}", self.api_base, self.bot_token, trimmed)
+    }
+
+    fn normalize_api_base(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(trimmed.trim_end_matches('/').to_string())
     }
 
     async fn fetch_bot_username(&self) -> anyhow::Result<String> {
@@ -827,10 +842,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
 
     /// Download a file from the Telegram CDN.
     async fn download_file(&self, file_path: &str) -> anyhow::Result<Vec<u8>> {
-        let url = format!(
-            "https://api.telegram.org/file/bot{}/{file_path}",
-            self.bot_token
-        );
+        let url = self.file_url(file_path);
         let resp = self
             .http_client()
             .get(&url)
@@ -1061,6 +1073,14 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         }
 
         if !self.is_any_user_allowed(identities.iter().copied()) {
+            tracing::debug!(
+                "Skipping voice message from unauthorized user: {} (allowed_users: {:?})",
+                sender_identity,
+                self.allowed_users
+                    .read()
+                    .map(|u| u.iter().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default()
+            );
             return None;
         }
 
@@ -1324,10 +1344,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             .to_string();
 
         // Step 2: download the actual file
-        let download_url = format!(
-            "https://api.telegram.org/file/bot{}/{}",
-            self.bot_token, file_path
-        );
+        let download_url = self.file_url(&file_path);
         let img_resp = self.http_client().get(&download_url).send().await?;
         let bytes = img_resp.bytes().await?;
 
@@ -2849,6 +2866,20 @@ mod tests {
         assert_eq!(
             ch.api_url("getMe"),
             "https://api.telegram.org/bot123:ABC/getMe"
+        );
+    }
+
+    #[test]
+    fn telegram_api_url_custom_base_trims_slash() {
+        let ch = TelegramChannel::new("123:ABC".into(), vec![], false)
+            .with_api_base("https://tapi.bale.ai/".into());
+        assert_eq!(
+            ch.api_url("getMe"),
+            "https://tapi.bale.ai/bot123:ABC/getMe"
+        );
+        assert_eq!(
+            ch.file_url("files/photo.jpg"),
+            "https://tapi.bale.ai/file/bot123:ABC/files/photo.jpg"
         );
     }
 
