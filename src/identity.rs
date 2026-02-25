@@ -981,6 +981,47 @@ pub fn is_aieos_configured(config: &IdentityConfig) -> bool {
     config.format == "aieos" && (config.aieos_path.is_some() || config.aieos_inline.is_some())
 }
 
+// ── Identity Backend Profiles (for wizard selection) ─────────────────────
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct IdentityBackendProfile {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub description: &'static str,
+}
+
+const OPENCLAW_PROFILE: IdentityBackendProfile = IdentityBackendProfile {
+    key: "openclaw",
+    label: "OpenClaw (Markdown files)",
+    description: "Traditional markdown files (AGENTS.md, SOUL.md, USER.md, etc.)",
+};
+
+const AIEOS_PROFILE: IdentityBackendProfile = IdentityBackendProfile {
+    key: "aieos",
+    label: "AIEOS (JSON identity)",
+    description: "Portable AI identity JSON format (aieos.org specification)",
+};
+
+pub fn selectable_identity_backends() -> &'static [IdentityBackendProfile] {
+    &[OPENCLAW_PROFILE, AIEOS_PROFILE]
+}
+
+pub fn generate_default_aieos_json(agent_name: &str, user_name: &str, timezone: &str) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "identity": {
+            "names": {"full": agent_name, "nickname": agent_name},
+            "bio": "A ZeroClaw AI assistant.",
+            "origin": "ZeroClaw Runtime",
+            "residence": timezone
+        },
+        "psychology": {"mbti": "INTJ", "moral_compass": ["Be helpful", "Respect privacy"]},
+        "linguistics": {"style": "Direct and clear."},
+        "motivations": {"core_drive": "Help the user"},
+        "interests": {"favorites": {"user": user_name, "timezone": timezone}}
+    }))
+    .unwrap_or_else(|_| "{}".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
