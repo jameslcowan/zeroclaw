@@ -248,6 +248,10 @@ pub struct Config {
     /// Inter-process agent communication (`[agents_ipc]`).
     #[serde(default)]
     pub agents_ipc: AgentsIpcConfig,
+
+    /// Plugin system configuration (`[plugins]`).
+    #[serde(default)]
+    pub plugins: PluginsConfig,
 }
 
 /// Named provider profile definition compatible with Codex app-server style config.
@@ -459,6 +463,58 @@ impl Default for AgentsIpcConfig {
             staleness_secs: default_agents_ipc_staleness_secs(),
         }
     }
+}
+
+// ── Plugin System ──────────────────────────────────────────────────
+
+fn default_plugins_dir() -> String {
+    "plugins".into()
+}
+
+/// Plugin system configuration (`[plugins]` section).
+///
+/// The plugin system allows 3rd-party components to extend ZeroClaw
+/// without recompilation. Currently supports memory backend plugins.
+///
+/// # Security
+///
+/// - Disabled by default for security
+/// - Requires compile-time opt-in (`--features plugins`)
+/// - Plugins run in sandboxed WASM environment
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginsConfig {
+    /// Enable plugin loading (default: false for security).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Directory containing plugin WASM modules (relative to workspace or absolute).
+    #[serde(default = "default_plugins_dir")]
+    pub dir: String,
+    /// Memory backend plugin configurations keyed by plugin ID.
+    #[serde(default)]
+    pub memory_backends: HashMap<String, MemoryPluginConfig>,
+}
+
+impl Default for PluginsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dir: default_plugins_dir(),
+            memory_backends: HashMap::new(),
+        }
+    }
+}
+
+/// Configuration for a memory backend plugin.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MemoryPluginConfig {
+    /// Path to the WASM module (relative to plugins dir or absolute).
+    pub module: String,
+    /// Plugin-specific configuration passed to the plugin.
+    #[serde(default)]
+    pub settings: HashMap<String, serde_json::Value>,
+    /// Enable this plugin (default: true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 /// Agent orchestration configuration (`[agent]` section).
@@ -3780,6 +3836,7 @@ impl Default for Config {
             query_classification: QueryClassificationConfig::default(),
             transcription: TranscriptionConfig::default(),
             agents_ipc: AgentsIpcConfig::default(),
+            plugins: PluginsConfig::default(),
         }
     }
 }

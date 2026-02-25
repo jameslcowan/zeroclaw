@@ -61,6 +61,8 @@ pub(crate) mod multimodal;
 pub mod observability;
 pub(crate) mod onboard;
 pub mod peripherals;
+#[cfg(feature = "plugins")]
+pub mod plugins;
 pub mod providers;
 pub mod rag;
 pub mod runtime;
