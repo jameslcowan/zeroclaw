@@ -25,6 +25,14 @@ Lệnh xuất schema:
 | `default_provider` | `openrouter` | ID hoặc bí danh provider |
 | `default_model` | `anthropic/claude-sonnet-4-6` | Model định tuyến qua provider đã chọn |
 | `default_temperature` | `0.7` | Nhiệt độ model |
+| `model_support_vision` | chưa đặt (`None`) | Ghi đè hỗ trợ vision cho provider/model đang dùng |
+
+Lưu ý:
+
+- `model_support_vision = true` bật vision (ví dụ Ollama chạy `llava`).
+- `model_support_vision = false` tắt vision.
+- Để trống giữ mặc định của provider.
+- Biến môi trường: `ZEROCLAW_MODEL_SUPPORT_VISION` hoặc `MODEL_SUPPORT_VISION` (giá trị: `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`).
 
 ## `[observability]`
 
@@ -259,6 +267,14 @@ Lưu ý:
 | `require_pairing` | `true` | Yêu cầu ghép nối trước khi xác thực bearer |
 | `allow_public_bind` | `false` | Chặn lộ public do vô ý |
 
+## `[gateway.node_control]` (thử nghiệm)
+
+| Khóa | Mặc định | Mục đích |
+|---|---|---|
+| `enabled` | `false` | Bật endpoint scaffold node-control (`POST /api/node-control`) |
+| `auth_token` | `null` | Shared token bổ sung, kiểm qua header `X-Node-Control-Token` |
+| `allowed_node_ids` | `[]` | Allowlist cho `node.describe`/`node.invoke` (`[]` = chấp nhận mọi node) |
+
 ## `[autonomy]`
 
 | Khóa | Mặc định | Mục đích |
@@ -403,6 +419,8 @@ Lưu ý:
 - Khi timeout xảy ra, người dùng nhận: `⚠️ Request timed out while waiting for the model. Please try again.`
 - Hành vi ngắt chỉ Telegram được điều khiển bằng `channels_config.telegram.interrupt_on_new_message` (mặc định `false`).
   Khi bật, tin nhắn mới từ cùng người gửi trong cùng chat sẽ hủy yêu cầu đang xử lý và giữ ngữ cảnh người dùng bị ngắt.
+- `channels_config.telegram.base_url` cho phép ghi đè endpoint Bot API (mặc định: `https://api.telegram.org`).
+  Đặt `https://tapi.bale.ai` để dùng API tương thích của Bale.
 - Khi `zeroclaw channel start` đang chạy, thay đổi `default_provider`, `default_model`, `default_temperature`, `api_key`, `api_url` và `reliability.*` được áp dụng nóng từ `config.toml` ở tin nhắn tiếp theo.
 
 Xem ma trận kênh và hành vi allowlist chi tiết tại [channels-reference.md](channels-reference.md).
