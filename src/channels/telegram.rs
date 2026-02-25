@@ -2385,7 +2385,7 @@ impl Channel for TelegramChannel {
         recipient: &str,
         message_id: &str,
         text: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<String>> {
         let (chat_id, _) = Self::parse_reply_target(recipient);
 
         // Rate-limit edits per chat
@@ -2394,7 +2394,7 @@ impl Channel for TelegramChannel {
             if let Some(last_time) = last_edits.get(&chat_id) {
                 let elapsed = u64::try_from(last_time.elapsed().as_millis()).unwrap_or(u64::MAX);
                 if elapsed < self.draft_update_interval_ms {
-                    return Ok(());
+                    return Ok(None);
                 }
             }
         }
@@ -2418,7 +2418,7 @@ impl Channel for TelegramChannel {
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!("Invalid Telegram message_id '{message_id}': {e}");
-                return Ok(());
+                return Ok(None);
             }
         };
 
@@ -2446,7 +2446,7 @@ impl Channel for TelegramChannel {
             tracing::debug!("Telegram editMessageText failed ({status}): {sanitized}");
         }
 
-        Ok(())
+        Ok(None)
     }
 
     async fn finalize_draft(
