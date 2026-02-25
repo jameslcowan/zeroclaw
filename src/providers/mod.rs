@@ -680,6 +680,7 @@ pub struct ProviderRuntimeOptions {
     pub reasoning_enabled: Option<bool>,
     pub custom_provider_api_mode: Option<CompatibleApiMode>,
     pub max_tokens_override: Option<u32>,
+    pub model_support_vision: Option<bool>,
 }
 
 impl Default for ProviderRuntimeOptions {
@@ -692,6 +693,7 @@ impl Default for ProviderRuntimeOptions {
             reasoning_enabled: None,
             custom_provider_api_mode: None,
             max_tokens_override: None,
+            model_support_vision: None,
         }
     }
 }
@@ -1364,7 +1366,8 @@ pub fn create_resilient_provider_with_options(
         reliability.provider_backoff_ms,
     )
     .with_api_keys(reliability.api_keys.clone())
-    .with_model_fallbacks(reliability.model_fallbacks.clone());
+    .with_model_fallbacks(reliability.model_fallbacks.clone())
+    .with_vision_override(options.model_support_vision);
 
     Ok(Box::new(reliable))
 }
@@ -1436,8 +1439,7 @@ pub fn create_routed_provider_with_options(
             .then_some(api_url)
             .flatten();
 
-        let mut route_options = options.clone();
-        route_options.max_tokens_override = route.max_tokens;
+        let route_options = options.clone();
 
         match create_resilient_provider_with_options(
             &route.provider,
@@ -1467,11 +1469,24 @@ pub fn create_routed_provider_with_options(
         }
     }
 
-    Ok(Box::new(router::RouterProvider::new(
-        providers,
-        routes,
-        default_model.to_string(),
-    )))
+    // Build route table
+    let routes: Vec<(String, router::Route)> = model_routes
+        .iter()
+        .map(|r| {
+            (
+                r.hint.clone(),
+                router::Route {
+                    provider_name: r.provider.clone(),
+                    model: r.model.clone(),
+                },
+            )
+        })
+        .collect();
+
+    Ok(Box::new(
+        router::RouterProvider::new(providers, routes, default_model.to_string())
+            .with_vision_override(options.model_support_vision),
+    ))
 }
 
 /// Information about a supported provider for display purposes.
