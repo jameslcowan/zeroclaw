@@ -411,6 +411,7 @@ pub async fn run_quick_setup(
     model_override: Option<&str>,
     memory_backend: Option<&str>,
     force: bool,
+    no_totp: bool,
 ) -> Result<Config> {
     let home = directories::UserDirs::new()
         .map(|u| u.home_dir().to_path_buf())
@@ -422,6 +423,7 @@ pub async fn run_quick_setup(
         model_override,
         memory_backend,
         force,
+        no_totp,
         &home,
     )
     .await
@@ -456,6 +458,7 @@ async fn run_quick_setup_with_home(
     model_override: Option<&str>,
     memory_backend: Option<&str>,
     force: bool,
+    no_totp: bool,
     home: &Path,
 ) -> Result<Config> {
     println!("{}", style(BANNER).cyan().bold());
@@ -486,7 +489,7 @@ async fn run_quick_setup_with_home(
     // Create memory config based on backend choice
     let memory_config = memory_config_defaults_for_backend(&memory_backend_name);
 
-    let config = Config {
+    let mut config = Config {
         workspace_dir: workspace_dir.clone(),
         config_path: config_path.clone(),
         api_key: credential_override.map(|c| {
@@ -540,6 +543,9 @@ async fn run_quick_setup_with_home(
         agents_ipc: crate::config::AgentsIpcConfig::default(),
         model_support_vision: None,
     };
+    if no_totp {
+        config.security.otp.enabled = false;
+    }
 
     config.save().await?;
     persist_workspace_selection(&config.config_path).await?;
@@ -582,7 +588,11 @@ async fn run_quick_setup_with_home(
     println!(
         "  {} Security:   {}",
         style("✓").green().bold(),
-        style("Supervised (workspace-scoped)").green()
+        if no_totp {
+            style("Supervised (workspace-scoped), TOTP disabled (--no-totp)").yellow()
+        } else {
+            style("Supervised (workspace-scoped), TOTP enabled").green()
+        }
     );
     println!(
         "  {} Memory:     {} (auto-save: {})",
@@ -620,6 +630,16 @@ async fn run_quick_setup_with_home(
         style("Config saved:").white().bold(),
         style(config_path.display()).green()
     );
+    if no_totp {
+        println!(
+            "  {} {}",
+            style("⚠").yellow().bold(),
+            style(
+                "TOTP is disabled by operator choice. This reduces protection for sensitive actions."
+            )
+            .yellow()
+        );
+    }
     println!();
     println!("  {}", style("Next steps:").white().bold());
     if credential_override.is_none() {
@@ -6010,6 +6030,7 @@ mod tests {
         model_override: Option<&str>,
         memory_backend: Option<&str>,
         force: bool,
+        no_totp: bool,
         home: &Path,
     ) -> Result<Config> {
         let _env_guard = env_lock().lock().await;
@@ -6022,6 +6043,7 @@ mod tests {
             model_override,
             memory_backend,
             force,
+            no_totp,
             home,
         )
         .await
@@ -6099,6 +6121,7 @@ mod tests {
             Some("custom-model-946"),
             Some("sqlite"),
             false,
+            false,
             tmp.path(),
         )
         .await
@@ -6123,6 +6146,7 @@ mod tests {
             None,
             Some("sqlite"),
             false,
+            false,
             tmp.path(),
         )
         .await
@@ -6131,6 +6155,44 @@ mod tests {
         let expected = default_model_for_provider("anthropic");
         assert_eq!(config.default_provider.as_deref(), Some("anthropic"));
         assert_eq!(config.default_model.as_deref(), Some(expected.as_str()));
+    }
+
+    #[tokio::test]
+    async fn quick_setup_enables_totp_by_default() {
+        let tmp = TempDir::new().unwrap();
+
+        let config = run_quick_setup_with_clean_env(
+            Some("sk-totp-default"),
+            Some("openrouter"),
+            None,
+            Some("sqlite"),
+            false,
+            false,
+            tmp.path(),
+        )
+        .await
+        .expect("quick setup should succeed");
+
+        assert!(config.security.otp.enabled);
+    }
+
+    #[tokio::test]
+    async fn quick_setup_no_totp_disables_totp() {
+        let tmp = TempDir::new().unwrap();
+
+        let config = run_quick_setup_with_clean_env(
+            Some("sk-no-totp"),
+            Some("openrouter"),
+            None,
+            Some("sqlite"),
+            false,
+            true,
+            tmp.path(),
+        )
+        .await
+        .expect("quick setup should succeed with --no-totp behavior");
+
+        assert!(!config.security.otp.enabled);
     }
 
     #[tokio::test]
@@ -6149,6 +6211,7 @@ mod tests {
             Some("openrouter"),
             Some("custom-model"),
             Some("sqlite"),
+            false,
             false,
             tmp.path(),
         )
@@ -6180,6 +6243,7 @@ mod tests {
             Some("custom-model-fresh"),
             Some("sqlite"),
             true,
+            false,
             tmp.path(),
         )
         .await
@@ -6213,6 +6277,7 @@ mod tests {
             Some("openrouter"),
             Some("model-env"),
             Some("sqlite"),
+            false,
             false,
             tmp.path(),
         )

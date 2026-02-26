@@ -4140,8 +4140,8 @@ pub enum OtpMethod {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OtpConfig {
-    /// Enable OTP gating. Defaults to disabled for backward compatibility.
-    #[serde(default)]
+    /// Enable OTP gating. Defaults to enabled.
+    #[serde(default = "default_otp_enabled")]
     pub enabled: bool,
 
     /// OTP method.
@@ -4169,6 +4169,10 @@ pub struct OtpConfig {
     pub gated_domain_categories: Vec<String>,
 }
 
+fn default_otp_enabled() -> bool {
+    true
+}
+
 fn default_otp_token_ttl_secs() -> u64 {
     30
 }
@@ -4190,7 +4194,7 @@ fn default_otp_gated_actions() -> Vec<String> {
 impl Default for OtpConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: default_otp_enabled(),
             method: OtpMethod::Totp,
             token_ttl_secs: default_otp_token_ttl_secs(),
             cache_valid_secs: default_otp_cache_valid_secs(),
@@ -9912,7 +9916,7 @@ default_temperature = 0.7
         )
         .unwrap();
 
-        assert!(!parsed.security.otp.enabled);
+        assert!(parsed.security.otp.enabled);
         assert_eq!(parsed.security.otp.method, OtpMethod::Totp);
         assert!(!parsed.security.estop.enabled);
         assert!(parsed.security.estop.require_otp_to_resume);
