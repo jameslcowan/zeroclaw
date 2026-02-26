@@ -39,12 +39,15 @@ permissions:
     id-token: write # Required for cosign keyless signing via OIDC
 
 env:
+    GIT_CONFIG_COUNT: "1"
+    GIT_CONFIG_KEY_0: core.hooksPath
+    GIT_CONFIG_VALUE_0: /dev/null
     CARGO_TERM_COLOR: always
 
 jobs:
     prepare:
         name: Prepare Release Context
-        runs-on: blacksmith-2vcpu-ubuntu-2404
+        runs-on: [self-hosted, aws-india]
         outputs:
             release_ref: ${{ steps.vars.outputs.release_ref }}
             release_tag: ${{ steps.vars.outputs.release_tag }}
@@ -154,21 +157,37 @@ jobs:
                       cross_compiler: ""
                       linker_env: ""
                       linker: ""
-                    - os: ubuntu-latest
+                    - os: self-hosted
+                      target: x86_64-unknown-linux-musl
+                      artifact: zeroclaw
+                      archive_ext: tar.gz
+                      cross_compiler: ""
+                      linker_env: ""
+                      linker: ""
+                      use_cross: true
+                    - os: ubuntu-22.04
                       target: aarch64-unknown-linux-gnu
                       artifact: zeroclaw
                       archive_ext: tar.gz
                       cross_compiler: gcc-aarch64-linux-gnu
                       linker_env: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER
                       linker: aarch64-linux-gnu-gcc
-                    - os: ubuntu-latest
+                    - os: self-hosted
+                      target: aarch64-unknown-linux-musl
+                      artifact: zeroclaw
+                      archive_ext: tar.gz
+                      cross_compiler: ""
+                      linker_env: ""
+                      linker: ""
+                      use_cross: true
+                    - os: ubuntu-22.04
                       target: armv7-unknown-linux-gnueabihf
                       artifact: zeroclaw
                       archive_ext: tar.gz
                       cross_compiler: gcc-arm-linux-gnueabihf
                       linker_env: CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER
                       linker: arm-linux-gnueabihf-gcc
-                    - os: ubuntu-latest
+                    - os: self-hosted
                       target: armv7-linux-androideabi
                       artifact: zeroclaw
                       archive_ext: tar.gz
@@ -177,7 +196,7 @@ jobs:
                       linker: ""
                       android_ndk: true
                       android_api: 21
-                    - os: ubuntu-latest
+                    - os: self-hosted
                       target: aarch64-linux-android
                       artifact: zeroclaw
                       archive_ext: tar.gz
@@ -186,6 +205,14 @@ jobs:
                       linker: ""
                       android_ndk: true
                       android_api: 21
+                    - os: self-hosted
+                      target: x86_64-unknown-freebsd
+                      artifact: zeroclaw
+                      archive_ext: tar.gz
+                      cross_compiler: ""
+                      linker_env: ""
+                      linker: ""
+                      use_cross: true
                     - os: macos-15-intel
                       target: x86_64-apple-darwin
                       artifact: zeroclaw
@@ -220,6 +247,11 @@ jobs:
 
             - uses: useblacksmith/rust-cache@f53e7f127245d2a269b3d90879ccf259876842d5 # v3
               if: runner.os != 'Windows'
+
+            - name: Install cross for cross-built targets
+              if: matrix.use_cross
+              run: |
+                  cargo install cross --git https://github.com/cross-rs/cross
 
             - name: Install cross-compilation toolchain (Linux)
               if: runner.os == 'Linux' && matrix.cross_compiler != ''
@@ -328,7 +360,7 @@ jobs:
     verify-artifacts:
         name: Verify Artifact Set
         needs: [prepare, build-release]
-        runs-on: blacksmith-2vcpu-ubuntu-2404
+        runs-on: [self-hosted, aws-india]
         steps:
             - name: Download all artifacts
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -368,7 +400,7 @@ jobs:
         name: Publish Release
         if: needs.prepare.outputs.publish_release == 'true'
         needs: [prepare, verify-artifacts]
-        runs-on: blacksmith-2vcpu-ubuntu-2404
+        runs-on: [self-hosted, aws-india]
         timeout-minutes: 45
         steps:
             - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

@@ -2761,6 +2761,14 @@ pub struct TelegramConfig {
     /// Direct messages are always processed.
     #[serde(default)]
     pub mention_only: bool,
+    /// Group-chat trigger controls.
+    #[serde(default)]
+    pub group_reply: Option<GroupReplyConfig>,
+    /// Optional custom base URL for Telegram-compatible APIs.
+    /// Defaults to "https://api.telegram.org" when omitted.
+    /// Example for Bale messenger: "https://tapi.bale.ai"
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 impl ChannelConfig for TelegramConfig {
@@ -4873,6 +4881,65 @@ mod tests {
     }
 
     #[test]
+    async fn config_debug_redacts_sensitive_values() {
+        let mut config = Config::default();
+        config.workspace_dir = PathBuf::from("/tmp/workspace");
+        config.config_path = PathBuf::from("/tmp/config.toml");
+        config.api_key = Some("root-credential".into());
+        config.storage.provider.config.db_url = Some("postgres://user:pw@host/db".into());
+        config.browser.computer_use.api_key = Some("browser-credential".into());
+        config.gateway.paired_tokens = vec!["zc_0123456789abcdef".into()];
+        config.channels_config.telegram = Some(TelegramConfig {
+            bot_token: "telegram-credential".into(),
+            allowed_users: Vec::new(),
+            stream_mode: StreamMode::Off,
+            draft_update_interval_ms: 1000,
+            interrupt_on_new_message: false,
+            mention_only: false,
+            group_reply: None,
+            base_url: None,
+        });
+        config.agents.insert(
+            "worker".into(),
+            DelegateAgentConfig {
+                provider: "openrouter".into(),
+                model: "model-test".into(),
+                system_prompt: None,
+                api_key: Some("agent-credential".into()),
+                temperature: None,
+                max_depth: 3,
+                agentic: false,
+                allowed_tools: Vec::new(),
+                max_iterations: 10,
+            },
+        );
+
+        let debug_output = format!("{config:?}");
+        assert!(debug_output.contains("***REDACTED***"));
+
+        for (idx, secret) in [
+            "root-credential",
+            "postgres://user:pw@host/db",
+            "browser-credential",
+            "zc_0123456789abcdef",
+            "telegram-credential",
+            "agent-credential",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert!(
+                !debug_output.contains(secret),
+                "debug output leaked secret value at index {idx}"
+            );
+        }
+
+        assert!(!debug_output.contains("paired_tokens"));
+        assert!(!debug_output.contains("bot_token"));
+        assert!(!debug_output.contains("db_url"));
+    }
+
+    #[test]
     async fn config_dir_creation_error_mentions_openrc_and_path() {
         let msg = config_dir_creation_error(Path::new("/etc/zeroclaw"));
         assert!(msg.contains("/etc/zeroclaw"));
@@ -5119,6 +5186,8 @@ default_temperature = 0.7
                     draft_update_interval_ms: default_draft_update_interval_ms(),
                     interrupt_on_new_message: false,
                     mention_only: false,
+                    group_reply: None,
+                    base_url: None,
                 }),
                 discord: None,
                 slack: None,
@@ -5379,6 +5448,18 @@ tool_dispatcher = "xml"
         config.browser.computer_use.api_key = Some("browser-credential".into());
         config.web_search.brave_api_key = Some("brave-credential".into());
         config.storage.provider.config.db_url = Some("postgres://user:pw@host/db".into());
+        config.reliability.api_keys = vec!["backup-credential".into()];
+        config.gateway.paired_tokens = vec!["zc_0123456789abcdef".into()];
+        config.channels_config.telegram = Some(TelegramConfig {
+            bot_token: "telegram-credential".into(),
+            allowed_users: Vec::new(),
+            stream_mode: StreamMode::Off,
+            draft_update_interval_ms: 1000,
+            interrupt_on_new_message: false,
+            mention_only: false,
+            group_reply: None,
+            base_url: None,
+        });
 
         config.agents.insert(
             "worker".into(),
@@ -5490,6 +5571,8 @@ tool_dispatcher = "xml"
             draft_update_interval_ms: 500,
             interrupt_on_new_message: true,
             mention_only: false,
+            group_reply: None,
+            base_url: None,
         };
         let json = serde_json::to_string(&tc).unwrap();
         let parsed: TelegramConfig = serde_json::from_str(&json).unwrap();
@@ -5507,6 +5590,42 @@ tool_dispatcher = "xml"
         assert_eq!(parsed.stream_mode, StreamMode::Off);
         assert_eq!(parsed.draft_update_interval_ms, 1000);
         assert!(!parsed.interrupt_on_new_message);
+        assert!(parsed.base_url.is_none());
+        assert_eq!(
+            parsed.effective_group_reply_mode(),
+            GroupReplyMode::AllMessages
+        );
+        assert!(parsed.group_reply_allowed_sender_ids().is_empty());
+    }
+
+    #[test]
+    async fn telegram_config_custom_base_url() {
+        let json = r#"{"bot_token":"tok","allowed_users":[],"base_url":"https://tapi.bale.ai"}"#;
+        let parsed: TelegramConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.base_url, Some("https://tapi.bale.ai".to_string()));
+    }
+
+    #[test]
+    async fn telegram_group_reply_config_overrides_legacy_mention_only() {
+        let json = r#"{
+            "bot_token":"tok",
+            "allowed_users":["*"],
+            "mention_only":false,
+            "group_reply":{
+                "mode":"mention_only",
+                "allowed_sender_ids":["1001","1002"]
+            }
+        }"#;
+
+        let parsed: TelegramConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            parsed.effective_group_reply_mode(),
+            GroupReplyMode::MentionOnly
+        );
+        assert_eq!(
+            parsed.group_reply_allowed_sender_ids(),
+            vec!["1001".to_string(), "1002".to_string()]
+        );
     }
 
     #[test]

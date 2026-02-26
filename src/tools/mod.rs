@@ -15,6 +15,8 @@
 //! To add a new tool, implement [`Tool`] in a new submodule and register it in
 //! [`all_tools_with_runtime`]. See `AGENTS.md` §7.3 for the full change playbook.
 
+pub mod agents_ipc;
+pub mod apply_patch;
 pub mod browser;
 pub mod browser_open;
 pub mod cli_discovery;
@@ -56,6 +58,7 @@ pub mod task_plan;
 pub mod web_fetch;
 pub mod web_search_tool;
 
+pub use apply_patch::ApplyPatchTool;
 pub use browser::{BrowserTool, ComputerUseConfig};
 pub use browser_open::BrowserOpenTool;
 pub use composio::ComposioTool;
@@ -151,14 +154,26 @@ pub fn default_tools_with_runtime(
     security: Arc<SecurityPolicy>,
     runtime: Arc<dyn RuntimeAdapter>,
 ) -> Vec<Box<dyn Tool>> {
-    vec![
-        Box::new(ShellTool::new(security.clone(), runtime)),
-        Box::new(FileReadTool::new(security.clone())),
-        Box::new(FileWriteTool::new(security.clone())),
-        Box::new(FileEditTool::new(security.clone())),
-        Box::new(GlobSearchTool::new(security.clone())),
-        Box::new(ContentSearchTool::new(security)),
-    ]
+    let has_shell_access = runtime.has_shell_access();
+    let has_filesystem_access = runtime.has_filesystem_access();
+    let mut tools: Vec<Box<dyn Tool>> = Vec::new();
+
+    if has_shell_access {
+        tools.push(Box::new(ShellTool::new(security.clone(), runtime.clone())));
+    }
+    if has_filesystem_access {
+        tools.push(Box::new(FileReadTool::new(security.clone())));
+        tools.push(Box::new(FileWriteTool::new(security.clone())));
+        tools.push(Box::new(FileEditTool::new(security.clone())));
+        tools.push(Box::new(ApplyPatchTool::new()));
+        tools.push(Box::new(GlobSearchTool::new(security.clone())));
+        tools.push(Box::new(ContentSearchTool::new(security.clone())));
+    }
+    if runtime.as_any().is::<crate::runtime::WasmRuntime>() {
+        tools.push(Box::new(WasmModuleTool::new(security, runtime)));
+    }
+
+    tools
 }
 
 /// Create full tool registry including memory tools and optional Composio
@@ -243,6 +258,38 @@ pub fn all_tools_with_runtime(
             workspace_dir.to_path_buf(),
         )),
     ];
+
+    if has_shell_access {
+        tool_arcs.push(Arc::new(ShellTool::new_with_syscall_detector(
+            security.clone(),
+            runtime.clone(),
+            Some(syscall_detector.clone()),
+        )));
+        tool_arcs.push(Arc::new(ProcessTool::new_with_syscall_detector(
+            security.clone(),
+            runtime.clone(),
+            Some(syscall_detector),
+        )));
+        tool_arcs.push(Arc::new(GitOperationsTool::new(
+            security.clone(),
+            workspace_dir.to_path_buf(),
+        )));
+    }
+
+    if has_filesystem_access {
+        tool_arcs.push(Arc::new(FileReadTool::new(security.clone())));
+        tool_arcs.push(Arc::new(FileWriteTool::new(security.clone())));
+        tool_arcs.push(Arc::new(FileEditTool::new(security.clone())));
+        tool_arcs.push(Arc::new(ApplyPatchTool::new()));
+        tool_arcs.push(Arc::new(GlobSearchTool::new(security.clone())));
+        tool_arcs.push(Arc::new(ContentSearchTool::new(security.clone())));
+    }
+    if runtime.as_any().is::<crate::runtime::WasmRuntime>() {
+        tool_arcs.push(Arc::new(WasmModuleTool::new(
+            security.clone(),
+            runtime.clone(),
+        )));
+    }
 
     if browser_config.enabled {
         // Add legacy browser_open tool for simple URL opening
@@ -369,7 +416,34 @@ mod tests {
     fn default_tools_has_expected_count() {
         let security = Arc::new(SecurityPolicy::default());
         let tools = default_tools(security);
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 7);
+        assert!(tools.iter().any(|tool| tool.name() == "apply_patch"));
+    }
+
+    #[test]
+    fn default_tools_with_runtime_includes_wasm_module_for_wasm_runtime() {
+        let security = Arc::new(SecurityPolicy::default());
+        let runtime: Arc<dyn RuntimeAdapter> =
+            Arc::new(WasmRuntime::new(WasmRuntimeConfig::default()));
+        let tools = default_tools_with_runtime(security, runtime);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.contains(&"wasm_module"));
+    }
+
+    #[test]
+    fn default_tools_with_runtime_excludes_shell_and_fs_for_wasm_runtime() {
+        let security = Arc::new(SecurityPolicy::default());
+        let runtime: Arc<dyn RuntimeAdapter> =
+            Arc::new(WasmRuntime::new(WasmRuntimeConfig::default()));
+        let tools = default_tools_with_runtime(security, runtime);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(!names.contains(&"shell"));
+        assert!(!names.contains(&"file_read"));
+        assert!(!names.contains(&"file_write"));
+        assert!(!names.contains(&"file_edit"));
+        assert!(!names.contains(&"apply_patch"));
+        assert!(!names.contains(&"glob_search"));
+        assert!(!names.contains(&"content_search"));
     }
 
     #[test]
