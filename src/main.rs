@@ -41,6 +41,8 @@ use std::io::Write;
 use tracing::{info, warn};
 use tracing_subscriber::{fmt, EnvFilter};
 
+const PROFILE_MISMATCH_PREFIX: &str = "Pending login profile mismatch:";
+
 #[derive(Debug, Clone, ValueEnum)]
 enum QuotaFormat {
     Text,
@@ -1939,7 +1941,8 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
 
                         if pending.profile != profile {
                             bail!(
-                                "Pending login profile mismatch: pending={}, requested={}",
+                                "{} pending={}, requested={}",
+                                PROFILE_MISMATCH_PREFIX,
                                 pending.profile,
                                 profile
                             );
@@ -1981,7 +1984,7 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
 
                     if let Err(e) = result {
                         // Cleanup pending file on error
-                        if e.to_string().contains("profile mismatch") {
+                        if e.to_string().starts_with(PROFILE_MISMATCH_PREFIX) {
                             clear_pending_oauth_login(config, "openai");
                             eprintln!("❌ {}", e);
                             eprintln!(
@@ -2013,7 +2016,8 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
 
                         if pending.profile != profile {
                             bail!(
-                                "Pending login profile mismatch: pending={}, requested={}",
+                                "{} pending={}, requested={}",
+                                PROFILE_MISMATCH_PREFIX,
                                 pending.profile,
                                 profile
                             );
@@ -2057,7 +2061,7 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
 
                     if let Err(e) = result {
                         // Cleanup pending file on error
-                        if e.to_string().contains("profile mismatch") {
+                        if e.to_string().starts_with(PROFILE_MISMATCH_PREFIX) {
                             clear_pending_oauth_login(config, "gemini");
                             eprintln!("❌ {}", e);
                             eprintln!(
