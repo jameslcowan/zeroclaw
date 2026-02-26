@@ -76,23 +76,23 @@ Operational notes:
 
 Matrix and Lark support are controlled at compile time.
 
-- Default builds are lean (`default = []`) and do not include Matrix/Lark.
-- Typical local check with only hardware support:
+- Default builds include Lark/Feishu (`default = ["channel-lark"]`), while Matrix remains opt-in.
+- For a lean local build without Matrix/Lark:
 
 ```bash
-cargo check --features hardware
+cargo check --no-default-features --features hardware
 ```
 
-- Enable Matrix explicitly when needed:
+- Enable Matrix explicitly in a custom feature set:
 
 ```bash
-cargo check --features hardware,channel-matrix
+cargo check --no-default-features --features hardware,channel-matrix
 ```
 
-- Enable Lark explicitly when needed:
+- Enable Lark explicitly in a custom feature set:
 
 ```bash
-cargo check --features hardware,channel-lark
+cargo check --no-default-features --features hardware,channel-lark
 ```
 
 If `[channels_config.matrix]`, `[channels_config.lark]`, or `[channels_config.feishu]` is present but the corresponding feature is not compiled in, `zeroclaw channel list`, `zeroclaw channel doctor`, and `zeroclaw channel start` will report that the channel is intentionally skipped for this build.
@@ -152,6 +152,7 @@ Field names differ by channel:
 [channels_config.telegram]
 bot_token = "123456:telegram-token"
 allowed_users = ["*"]
+base_url = "https://api.telegram.org" # optional: set to https://tapi.bale.ai for Bale
 stream_mode = "off"               # optional: off | partial
 draft_update_interval_ms = 1000   # optional: edit throttle for partial streaming
 mention_only = false              # optional: require @mention in groups
@@ -162,6 +163,7 @@ Telegram notes:
 
 - `interrupt_on_new_message = true` preserves interrupted user turns in conversation history, then restarts generation on the newest message.
 - Interruption scope is strict: same sender in the same chat. Messages from different chats are processed independently.
+- `base_url` defaults to `https://api.telegram.org`; set to `https://tapi.bale.ai` to use Bale's Telegram-compatible API.
 
 ### 4.2 Discord
 
@@ -209,6 +211,7 @@ user_id = "@zeroclaw:matrix.example.com"   # optional, recommended for E2EE
 device_id = "DEVICEID123"                  # optional, recommended for E2EE
 room_id = "!room:matrix.example.com"       # or room alias (#ops:matrix.example.com)
 allowed_users = ["*"]
+mention_only = false                       # optional: when true, only DM / @mention / reply-to-bot
 ```
 
 See [Matrix E2EE Guide](./matrix-e2ee-guide.md) for encrypted-room troubleshooting.
@@ -336,6 +339,8 @@ Migration note:
 
 - Legacy config `[channels_config.lark] use_feishu = true` is still supported for backward compatibility.
 - Prefer `[channels_config.feishu]` for new setups.
+- Inbound `image` messages are converted to multimodal markers (`[IMAGE:data:image/...;base64,...]`).
+- If image download fails, ZeroClaw forwards fallback text instead of silently dropping the message.
 
 ### 4.13 Nostr
 
@@ -385,7 +390,15 @@ allowed_users = ["*"]
 app_id = "qq-app-id"
 app_secret = "qq-app-secret"
 allowed_users = ["*"]
+receive_mode = "webhook" # webhook (default) or websocket (legacy fallback)
 ```
+
+Notes:
+
+- `webhook` mode is now the default and serves inbound callbacks at `POST /qq`.
+- QQ validation challenge payloads (`op = 13`) are auto-signed using `app_secret`.
+- `X-Bot-Appid` is checked when present and must match `app_id`.
+- Set `receive_mode = "websocket"` to keep the legacy gateway WS receive path.
 
 ### 4.16 Nextcloud Talk
 
