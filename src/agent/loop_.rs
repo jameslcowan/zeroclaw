@@ -2768,6 +2768,73 @@ After text."#;
     }
 
     #[test]
+    fn parse_tool_calls_handles_openai_message_wrapper_with_content() {
+        let response = r#"{
+            "message": {
+                "role": "assistant",
+                "content": "<think>plan</think>\nI will call a tool.",
+                "tool_calls": [
+                    {
+                        "id": "chatcmpl-tool-a18c01b8849eb05d",
+                        "type": "function",
+                        "function": {
+                            "name": "shell",
+                            "arguments": "{\"command\": \"ls -la\"}"
+                        }
+                    }
+                ]
+            },
+            "finish_reason": "tool_calls"
+        }"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(
+            calls[0].arguments.get("command").unwrap().as_str().unwrap(),
+            "ls -la"
+        );
+        assert!(text.contains("I will call a tool."));
+    }
+
+    #[test]
+    fn parse_tool_calls_handles_openai_choices_message_wrapper() {
+        let response = r#"{
+            "id": "chatcmpl-123",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Checking now.",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "shell",
+                                    "arguments": "{\"command\":\"pwd\"}"
+                                }
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls"
+                }
+            ]
+        }"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(text, "Checking now.");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(
+            calls[0].arguments.get("command").unwrap().as_str().unwrap(),
+            "pwd"
+        );
+        assert_eq!(calls[0].tool_call_id.as_deref(), Some("call_1"));
+    }
+
+    #[test]
     fn parse_tool_calls_preserves_openai_tool_call_ids() {
         let response = r#"{"tool_calls":[{"id":"call_42","function":{"name":"shell","arguments":"{\"command\":\"pwd\"}"}}]}"#;
         let (_, calls) = parse_tool_calls(response);
