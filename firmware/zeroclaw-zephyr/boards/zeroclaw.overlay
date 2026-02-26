@@ -1,0 +1,61 @@
+/*
+ * ZeroClaw Device Tree Overlay for Zephyr
+ * Demonstrates hardware abstraction through device tree
+ */
+
+/ {
+    aliases {
+        zeroclaw-led = &led0;
+        zeroclaw-uart = &uart0;
+        zeroclaw-sensor = &temp_sensor;
+    };
+    
+    zeroclaw {
+        compatible = "zeroclaw,hal";
+        label = "ZeroClaw HAL";
+        
+        /* GPIO configuration */
+        gpio-controller;
+        #gpio-cells = <2>;
+        
+        /* Hardware capabilities */
+        capabilities = "gpio", "uart", "sensor", "pwm";
+        max-devices = <8>;
+        protocol-version = <1>;
+    };
+    
+    /* Temperature sensor */
+    temp_sensor: tmp108@48 {
+        compatible = "ti,tmp108";
+        reg = <0x48>;
+        status = "okay";
+        
+        /* Alert configuration */
+        alert-gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
+    };
+    
+    /* ZeroClaw specific GPIO mappings */
+    zeroclaw_gpio: gpio-leds {
+        compatible = "gpio-leds";
+        
+        status_led: led_0 {
+            gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+            label = "ZeroClaw Status LED";
+        };
+        
+        error_led: led_1 {
+            gpios = <&gpio0 14 GPIO_ACTIVE_HIGH>;
+            label = "ZeroClaw Error LED";
+        };
+    };
+    
+    /* PWM for servo/motor control */
+    zeroclaw_pwm: pwm_leds {
+        compatible = "pwm-leds";
+        
+        servo_0: pwm_led_0 {
+            pwms = <&pwm0 0 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
+            label = "Servo Channel 0";
+        };
+    };
+};
