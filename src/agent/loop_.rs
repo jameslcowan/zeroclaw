@@ -12,6 +12,7 @@ use crate::tools::{self, Tool};
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use regex::{Regex, RegexSet};
+use rustyline::error::ReadlineError;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write;
 use std::io::Write as _;
@@ -1744,25 +1745,26 @@ pub async fn run(
 
         // Persistent conversation history across turns
         let mut history = vec![ChatMessage::system(&system_prompt)];
+        // Reusable readline editor for UTF-8 input support
+        let mut rl = rustyline::DefaultEditor::new()?;
 
         loop {
-            print!("> ");
-            let _ = std::io::stdout().flush();
-
-            let mut input = String::new();
-            match std::io::stdin().read_line(&mut input) {
-                Ok(0) => break,
-                Ok(_) => {}
+            let input = match rl.readline("> ") {
+                Ok(line) => line,
+                Err(ReadlineError::Interrupted | ReadlineError::Eof) => {
+                    break;
+                }
                 Err(e) => {
                     eprintln!("\nError reading input: {e}\n");
                     break;
                 }
-            }
+            };
 
             let user_input = input.trim().to_string();
             if user_input.is_empty() {
                 continue;
             }
+            rl.add_history_entry(&input)?;
             match user_input.as_str() {
                 "/quit" | "/exit" => break,
                 "/help" => {
@@ -1777,18 +1779,15 @@ pub async fn run(
                         "This will clear the current conversation and delete all session memory."
                     );
                     println!("Core memories (long-term facts/preferences) will be preserved.");
-                    print!("Continue? [y/N] ");
-                    let _ = std::io::stdout().flush();
+                    let confirm = rl.readline("Continue? [y/N] ").unwrap_or_default();
 
-                    let mut confirm = String::new();
-                    if std::io::stdin().read_line(&mut confirm).is_err() {
-                        continue;
-                    }
                     if !matches!(confirm.trim().to_lowercase().as_str(), "y" | "yes") {
                         println!("Cancelled.\n");
                         continue;
                     }
 
+                    // Ensure prior prompts are not navigable after reset.
+                    rl.clear_history()?;
                     history.clear();
                     history.push(ChatMessage::system(&system_prompt));
                     // Clear conversation and daily memory
