@@ -4,6 +4,13 @@
 # Wire protocol:
 #   Host → Device:  {"cmd":"gpio_write","params":{"pin":25,"value":1}}\n
 #   Device → Host:  {"ok":true,"data":{"pin":25,"value":1,"state":"HIGH"}}\n
+#
+# Pin direction policy:
+#   gpio_write always configures the pin as OUTPUT and caches it.
+#   gpio_read uses the cached Pin object if one already exists, so a pin
+#   that was set via gpio_write retains its OUTPUT direction — it is NOT
+#   reconfigured to INPUT.  If no cached Pin exists the pin is opened as
+#   INPUT and the new Pin is cached for subsequent reads.
 
 import sys
 import json
@@ -11,6 +18,11 @@ from machine import Pin
 
 # Onboard LED — GPIO 25 on Pico 1
 led = Pin(25, Pin.OUT)
+
+# Cache of Pin objects keyed by pin number (excludes the onboard LED on 25).
+# gpio_write stores pins as OUTPUT; gpio_read reuses the existing Pin if one
+# is cached rather than clobbering its direction.
+pins_cache = {}
 
 def handle(msg):
     cmd    = msg.get("cmd")
@@ -40,7 +52,10 @@ def handle(msg):
         if pin_num == 25:
             led.value(value)
         else:
-            Pin(pin_num, Pin.OUT).value(value)
+            # Always (re-)configure as OUT so subsequent reads on this pin
+            # reflect the driven state rather than clobbering the direction.
+            pins_cache[pin_num] = Pin(pin_num, Pin.OUT)
+            pins_cache[pin_num].value(value)
         state = "HIGH" if value == 1 else "LOW"
         return {"ok": True, "data": {"pin": pin_num, "value": value, "state": state}}
 
@@ -55,7 +70,10 @@ def handle(msg):
             return {"ok": False, "error": "invalid pin"}
         if pin_num < 0:
             return {"ok": False, "error": "invalid pin"}
-        value = led.value() if pin_num == 25 else Pin(pin_num, Pin.IN).value()
+        value = led.value() if pin_num == 25 else (
+            pins_cache[pin_num].value() if pin_num in pins_cache
+            else pins_cache.setdefault(pin_num, Pin(pin_num, Pin.IN)).value()
+        )
         state = "HIGH" if value == 1 else "LOW"
         return {"ok": True, "data": {"pin": pin_num, "value": value, "state": state}}
 
@@ -70,5 +88,9 @@ while True:
         msg    = json.loads(line)
         result = handle(msg)
         print(json.dumps(result))
-    except Exception as e:
+    except (ValueError, KeyError, TypeError) as e:
+        # ValueError   — json.loads() on malformed input
+        # KeyError     — unexpected missing key in a message dict
+        # TypeError    — wrong type in an operation
+        # Any other exception propagates so bugs surface during development.
         print(json.dumps({"ok": False, "error": str(e)}))

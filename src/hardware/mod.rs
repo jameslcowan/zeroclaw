@@ -33,7 +33,7 @@ pub mod manifest;
 pub mod subprocess;
 pub mod tool_registry;
 
-pub use device::{Device, DeviceCapabilities, DeviceContext, DeviceKind, DeviceRegistry, DeviceRuntime};
+pub use device::{Device, DeviceCapabilities, DeviceContext, DeviceKind, DeviceRegistry, DeviceRuntime, NO_HW_DEVICES_SUMMARY};
 pub use gpio::{gpio_tools, GpioReadTool, GpioWriteTool};
 #[cfg(feature = "hardware")]
 pub use pico_code::{device_code_tools, DeviceExecTool, DeviceReadCodeTool, DeviceWriteCodeTool};
@@ -135,7 +135,8 @@ pub async fn boot(peripherals: &crate::config::PeripheralsConfig) -> anyhow::Res
                 HardwareSerialTransport::new(&path, board.baud),
             ) as std::sync::Arc<dyn transport::Transport>;
             let caps = DeviceCapabilities { gpio: true, ..DeviceCapabilities::default() };
-            registry_inner.attach_transport(&alias, transport, caps);
+            registry_inner.attach_transport(&alias, transport, caps)
+                .unwrap_or_else(|e| tracing::warn!(alias = %alias, err = %e, "attach_transport: unexpected unknown alias"));
             // Mark path as registered so duplicate config entries are skipped.
             discovered_paths.insert(path.clone());
             tracing::info!(

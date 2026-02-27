@@ -177,47 +177,57 @@ impl Tool for SubprocessTool {
             }
         };
 
-        // Kill child, wait for exit status, and collect stderr — done before
-        // the match so all error branches can include them.
-        let _ = child.kill().await;
-        let child_status = child.wait().await.ok();
-        let stderr_msg = collect_stderr(stderr_handle).await;
-
         match read_result {
             // ── Timeout ────────────────────────────────────────────────────
-            Err(_elapsed) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "plugin '{}' timed out after {}s{}",
-                    self.manifest.tool.name,
-                    SUBPROCESS_TIMEOUT_SECS,
-                    if stderr_msg.is_empty() {
-                        String::new()
-                    } else {
-                        format!("; stderr: {}", stderr_msg)
-                    }
-                )),
-            }),
+            // The read deadline elapsed — force-kill the plugin and collect
+            // any stderr it emitted before dying.
+            Err(_elapsed) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                let stderr_msg = collect_stderr(stderr_handle).await;
+                Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!(
+                        "plugin '{}' timed out after {}s{}",
+                        self.manifest.tool.name,
+                        SUBPROCESS_TIMEOUT_SECS,
+                        if stderr_msg.is_empty() {
+                            String::new()
+                        } else {
+                            format!("; stderr: {}", stderr_msg)
+                        }
+                    )),
+                })
+            }
 
             // ── I/O error reading stdout ───────────────────────────────────
-            Ok(Err(io_err)) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "plugin '{}': I/O error reading stdout: {}{}",
-                    self.manifest.tool.name,
-                    io_err,
-                    if stderr_msg.is_empty() {
-                        String::new()
-                    } else {
-                        format!("; stderr: {}", stderr_msg)
-                    }
-                )),
-            }),
+            Ok(Err(io_err)) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                let stderr_msg = collect_stderr(stderr_handle).await;
+                Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!(
+                        "plugin '{}': I/O error reading stdout: {}{}",
+                        self.manifest.tool.name,
+                        io_err,
+                        if stderr_msg.is_empty() {
+                            String::new()
+                        } else {
+                            format!("; stderr: {}", stderr_msg)
+                        }
+                    )),
+                })
+            }
 
             // ── Got a line ────────────────────────────────────────────────
+            // Let the process finish naturally — plugins that write their
+            // result and then do cleanup should not be interrupted.
             Ok(Ok(line)) => {
+                let child_status = child.wait().await.ok();
+                let stderr_msg = collect_stderr(stderr_handle).await;
                 let line = line.trim();
 
                 if line.is_empty() {

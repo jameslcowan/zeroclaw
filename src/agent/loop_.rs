@@ -1167,7 +1167,7 @@ pub(crate) async fn run_tool_call_loop(
 /// Append the hardware device summary to the system prompt if non-trivial.
 fn append_hw_summary(system_prompt: &mut String, hw_device_summary: &str) {
     if !hw_device_summary.is_empty()
-        && hw_device_summary != "No hardware devices connected."
+        && hw_device_summary != crate::hardware::NO_HW_DEVICES_SUMMARY
     {
         system_prompt.push_str("\n## Connected Hardware Devices\n\n");
         system_prompt.push_str(hw_device_summary);
@@ -1878,6 +1878,54 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_shorthand_valid_object_returns_call() {
+        let result = parse_shorthand_tag_call(r#"shell{"command":"ls -la"}"#);
+        let call = result.expect("should parse valid shorthand");
+        assert_eq!(call.name, "shell");
+        assert_eq!(
+            call.arguments.get("command").and_then(|v| v.as_str()),
+            Some("ls -la")
+        );
+    }
+
+    #[test]
+    fn parse_shorthand_valid_with_trailing_junk_still_parses() {
+        // Trailing content after the closing '}' must not prevent parsing.
+        let result = parse_shorthand_tag_call(r#"my_tool{"key":true} extra junk"#);
+        let call = result.expect("should parse despite trailing junk");
+        assert_eq!(call.name, "my_tool");
+        assert_eq!(call.arguments["key"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn parse_shorthand_identifier_starts_with_digit_returns_none() {
+        assert!(parse_shorthand_tag_call(r#"1bad{"k":1}"#).is_none());
+    }
+
+    #[test]
+    fn parse_shorthand_identifier_with_disallowed_chars_returns_none() {
+        // Hyphens are not allowed in the identifier.
+        assert!(parse_shorthand_tag_call(r#"bad-name{"k":1}"#).is_none());
+    }
+
+    #[test]
+    fn parse_shorthand_array_value_returns_none() {
+        // JSON after identifier is an array, not an object.
+        assert!(parse_shorthand_tag_call(r#"tool[1,2,3]"#).is_none());
+    }
+
+    #[test]
+    fn parse_shorthand_literal_value_returns_none() {
+        // JSON after identifier is a scalar literal, not an object.
+        assert!(parse_shorthand_tag_call(r#"tool"string""#).is_none());
+    }
+
+    #[test]
+    fn parse_shorthand_empty_identifier_returns_none() {
+        assert!(parse_shorthand_tag_call(r#"{"k":1}"#).is_none());
+    }
 
     #[test]
     fn test_scrub_credentials() {

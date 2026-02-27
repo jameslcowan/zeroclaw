@@ -1348,7 +1348,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
 
     // Inject hardware device summary if available
     if !hw_device_summary.is_empty()
-        && hw_device_summary != "No hardware devices connected."
+        && hw_device_summary != crate::hardware::NO_HW_DEVICES_SUMMARY
     {
         system_prompt.push_str("\n## Connected Hardware Devices\n\n");
         system_prompt.push_str(&hw_device_summary);

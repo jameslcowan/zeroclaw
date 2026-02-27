@@ -339,7 +339,8 @@ mod tests {
                 gpio: true,
                 ..Default::default()
             },
-        );
+        )
+        .expect("alias was just registered");
         Arc::new(RwLock::new(reg))
     }
 

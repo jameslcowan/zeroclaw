@@ -204,8 +204,9 @@ pub fn is_serial_path_allowed(path: &str) -> bool {
     }
 
     // ── Fallback (other platforms) ────────────────────────────────────────
+    // Reject unknown platforms rather than applying a too-permissive prefix
+    // match.  If support is needed for a new platform, add a targeted branch
+    // above.
     #[allow(unreachable_code)]
-    ALLOWED_SERIAL_PATH_PREFIXES
-        .iter()
-        .any(|p| path.starts_with(p))
+    false
 }

@@ -285,10 +285,14 @@ impl Tool for GpioWriteTool {
             .and_then(|v| v.as_u64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'value' parameter"))?;
         if value != 0 && value != 1 {
-            return Err(anyhow::anyhow!(
-                "Invalid 'value' parameter: expected 0 or 1, got {}",
-                value
-            ));
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "Invalid 'value' parameter: expected 0 or 1, got {}",
+                    value
+                )),
+            });
         }
         self.transport
             .request("gpio_write", json!({ "pin": pin, "value": value }))

@@ -164,6 +164,11 @@ struct RegisteredDevice {
     capabilities: DeviceCapabilities,
 }
 
+/// Summary string returned by [`DeviceRegistry::prompt_summary`] when no
+/// devices are registered.  Exported so callers can compare against it without
+/// duplicating the literal.
+pub const NO_HW_DEVICES_SUMMARY: &str = "No hardware devices connected.";
+
 /// Registry of discovered devices with stable session aliases.
 ///
 /// - Scans at startup (via `hardware::discover`)
@@ -230,15 +235,21 @@ impl DeviceRegistry {
     }
 
     /// Attach a transport and capabilities to a previously registered device.
+    ///
+    /// Returns `Err` when `alias` is not found in the registry (should not
+    /// happen in normal usage because callers pass aliases from `register`).
     pub fn attach_transport(
         &mut self,
         alias: &str,
         transport: Arc<dyn Transport>,
         capabilities: DeviceCapabilities,
-    ) {
+    ) -> anyhow::Result<()> {
         if let Some(entry) = self.devices.get_mut(alias) {
             entry.transport = Some(transport);
             entry.capabilities = capabilities;
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("unknown device alias: {}", alias))
         }
     }
 
@@ -268,7 +279,7 @@ impl DeviceRegistry {
     /// Return a summary of connected devices for the LLM system prompt.
     pub fn prompt_summary(&self) -> String {
         if self.devices.is_empty() {
-            return "No hardware devices connected.".to_string();
+            return NO_HW_DEVICES_SUMMARY.to_string();
         }
 
         let mut lines = vec!["Connected devices:".to_string()];
@@ -467,7 +478,8 @@ impl DeviceRegistry {
                 gpio: true, // assume GPIO; Phase 3 will populate via capabilities handshake
                 ..DeviceCapabilities::default()
             };
-            registry.attach_transport(&alias, transport, caps);
+            registry.attach_transport(&alias, transport, caps)
+                .unwrap_or_else(|e| tracing::warn!(alias = %alias, err = %e, "attach_transport: unexpected unknown alias"));
 
             tracing::info!(
                 alias = %alias,
@@ -648,7 +660,7 @@ mod tests {
     #[test]
     fn registry_prompt_summary_empty() {
         let reg = DeviceRegistry::new();
-        assert_eq!(reg.prompt_summary(), "No hardware devices connected.");
+        assert_eq!(reg.prompt_summary(), NO_HW_DEVICES_SUMMARY);
     }
 
     #[test]
