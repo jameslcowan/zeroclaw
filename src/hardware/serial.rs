@@ -113,7 +113,8 @@ impl Transport for HardwareSerialTransport {
         let json = serde_json::to_string(cmd).map_err(|e| {
             TransportError::Protocol(format!("failed to serialize command: {e}"))
         })?;
-        tracing::info!(port = %self.port_path, cmd = %json, "serial send");
+        // Log command name only — never log the full payload (may contain large or sensitive data).
+        tracing::info!(port = %self.port_path, cmd = %cmd.cmd, "serial send");
 
         tokio::time::timeout(
             std::time::Duration::from_secs(SEND_TIMEOUT_SECS),
@@ -221,11 +222,30 @@ mod tests {
 
     #[test]
     fn allowed_paths_accept_valid_prefixes() {
-        assert!(is_path_allowed("/dev/ttyACM0"));
-        assert!(is_path_allowed("/dev/ttyUSB1"));
-        assert!(is_path_allowed("/dev/tty.usbmodem14101"));
-        assert!(is_path_allowed("/dev/cu.usbmodem14201"));
+        // Linux-only paths
+        #[cfg(target_os = "linux")]
+        {
+            assert!(is_path_allowed("/dev/ttyACM0"));
+            assert!(is_path_allowed("/dev/ttyUSB1"));
+        }
+        // macOS-only paths
+        #[cfg(target_os = "macos")]
+        {
+            assert!(is_path_allowed("/dev/tty.usbmodem14101"));
+            assert!(is_path_allowed("/dev/cu.usbmodem14201"));
+            assert!(is_path_allowed("/dev/tty.usbserial-1410"));
+            assert!(is_path_allowed("/dev/cu.usbserial-1410"));
+        }
+        // Windows-only paths
+        #[cfg(target_os = "windows")]
         assert!(is_path_allowed("COM3"));
+        // Cross-platform: macOS paths always work on macOS, Linux paths on Linux
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        {
+            assert!(is_path_allowed("/dev/ttyACM0"));
+            assert!(is_path_allowed("/dev/tty.usbmodem14101"));
+            assert!(is_path_allowed("COM3"));
+        }
     }
 
     #[test]
@@ -245,7 +265,18 @@ mod tests {
 
     #[tokio::test]
     async fn send_returns_disconnected_for_missing_device() {
-        let t = HardwareSerialTransport::new("/dev/ttyACM_phase2_test_99", 115_200);
+        // Use a platform-appropriate path that passes the serialpath allowlist
+        // but refers to a device that doesn't actually exist.
+        #[cfg(target_os = "linux")]
+        let path = "/dev/ttyACM_phase2_test_99";
+        #[cfg(target_os = "macos")]
+        let path = "/dev/tty.usbmodemfake9900";
+        #[cfg(target_os = "windows")]
+        let path = "COM99";
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        let path = "/dev/ttyACM_phase2_test_99";
+
+        let t = HardwareSerialTransport::new(path, 115_200);
         let result = t.send(&ZcCommand::simple("ping")).await;
         // Missing device → Disconnected or Timeout (system-dependent)
         assert!(
@@ -259,7 +290,16 @@ mod tests {
 
     #[tokio::test]
     async fn ping_handshake_returns_false_for_missing_device() {
-        let t = HardwareSerialTransport::new("/dev/ttyACM_phase2_test_99", 115_200);
+        #[cfg(target_os = "linux")]
+        let path = "/dev/ttyACM_phase2_test_99";
+        #[cfg(target_os = "macos")]
+        let path = "/dev/tty.usbmodemfake9900";
+        #[cfg(target_os = "windows")]
+        let path = "COM99";
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        let path = "/dev/ttyACM_phase2_test_99";
+
+        let t = HardwareSerialTransport::new(path, 115_200);
         assert!(!t.ping_handshake().await);
     }
 }

@@ -7,8 +7,9 @@
 //! - **MicroPython / CircuitPython** — `mpremote` for code read/write/exec.
 //! - **Arduino / Nucleus / Linux** — not yet implemented; returns a clear error.
 //!
-//! All three tools auto-select the first device in the registry when the
-//! `device` parameter is omitted.
+//! When the `device` parameter is omitted, each tool auto-selects the device
+//! only when **exactly one** device is registered.  If multiple devices are
+//! present the tool returns an error and requires an explicit `device` parameter.
 
 use super::device::{DeviceRegistry, DeviceRuntime};
 use crate::tools::traits::{Tool, ToolResult};
@@ -30,8 +31,10 @@ const PORT_POLL_MS: u64 = 200;
 
 /// Resolve the serial port path and runtime for a device.
 ///
-/// If `device_alias` is provided, look it up; otherwise auto-select the first
-/// device in the registry.  Returns (alias, port, runtime) or an error `ToolResult`.
+/// If `device_alias` is provided, look it up; otherwise auto-selects the device
+/// only when exactly one device is registered.  With multiple devices present,
+/// returns an error requiring an explicit alias.
+/// Returns `(alias, port, runtime)` or an error `ToolResult`.
 async fn resolve_device_port(
     registry: &RwLock<DeviceRegistry>,
     device_alias: Option<&str>,
@@ -172,6 +175,7 @@ impl Tool for DeviceReadCodeTool {
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
+            "additionalProperties": false,
             "properties": {
                 "device": {
                     "type": "string",
@@ -266,6 +270,7 @@ impl Tool for DeviceWriteCodeTool {
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
+            "additionalProperties": false,
             "properties": {
                 "device": {
                     "type": "string",
@@ -315,21 +320,42 @@ impl Tool for DeviceWriteCodeTool {
 
         tracing::info!(alias = %alias, port = %port, runtime = %runtime, code_len = code.len(), "writing main.py to device");
 
-        // Write code to a per-invocation unique temp file to avoid races.
-        let unique_id = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let tmp_path = std::env::temp_dir().join(format!("zeroclaw_main_{}.py", unique_id));
+        // Write code to an atomic, owner-only temp file via tempfile crate.
+        let named_tmp = match tokio::task::spawn_blocking(|| {
+            tempfile::Builder::new()
+                .prefix("zeroclaw_main_")
+                .suffix(".py")
+                .tempfile()
+        })
+        .await
+        {
+            Ok(Ok(f)) => f,
+            Ok(Err(e)) => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("failed to create temp file: {e}")),
+                });
+            }
+            Err(e) => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("temp file task failed: {e}")),
+                });
+            }
+        };
+        let tmp_path = named_tmp.path().to_path_buf();
+        let tmp_str = tmp_path.to_string_lossy().to_string();
+
         if let Err(e) = tokio::fs::write(&tmp_path, code).await {
+            // named_tmp dropped here — auto-removes the file.
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some(format!("failed to write temp file: {e}")),
             });
         }
-
-        let tmp_str = tmp_path.to_string_lossy().to_string();
 
         // Deploy via mpremote: copy + reset.
         let result = run_mpremote(
@@ -338,8 +364,10 @@ impl Tool for DeviceWriteCodeTool {
         )
         .await;
 
-        // Clean up temp file (best-effort).
-        let _ = tokio::fs::remove_file(&tmp_path).await;
+        // Explicit cleanup — log if removal fails rather than silently ignoring.
+        if let Err(e) = named_tmp.close() {
+            tracing::warn!(path = %tmp_str, err = %e, "failed to clean up temp file");
+        }
 
         match result {
             Ok((_stdout, _stderr)) => {
@@ -413,6 +441,7 @@ impl Tool for DeviceExecTool {
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
+            "additionalProperties": false,
             "properties": {
                 "device": {
                     "type": "string",
@@ -465,21 +494,42 @@ impl Tool for DeviceExecTool {
 
         tracing::info!(alias = %alias, port = %port, runtime = %runtime, code_len = code.len(), "executing snippet on device");
 
-        // Write snippet to a per-invocation unique temp file to avoid races.
-        let unique_id = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let tmp_path = std::env::temp_dir().join(format!("zeroclaw_exec_{}.py", unique_id));
+        // Write snippet to an atomic, owner-only temp file via tempfile crate.
+        let named_tmp = match tokio::task::spawn_blocking(|| {
+            tempfile::Builder::new()
+                .prefix("zeroclaw_exec_")
+                .suffix(".py")
+                .tempfile()
+        })
+        .await
+        {
+            Ok(Ok(f)) => f,
+            Ok(Err(e)) => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("failed to create temp file: {e}")),
+                });
+            }
+            Err(e) => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("temp file task failed: {e}")),
+                });
+            }
+        };
+        let tmp_path = named_tmp.path().to_path_buf();
+        let tmp_str = tmp_path.to_string_lossy().to_string();
+
         if let Err(e) = tokio::fs::write(&tmp_path, code).await {
+            // named_tmp dropped here — auto-removes the file.
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some(format!("failed to write temp file: {e}")),
             });
         }
-
-        let tmp_str = tmp_path.to_string_lossy().to_string();
 
         // Execute via mpremote run (does NOT modify main.py).
         let result = run_mpremote(
@@ -488,8 +538,10 @@ impl Tool for DeviceExecTool {
         )
         .await;
 
-        // Clean up temp file (best-effort).
-        let _ = tokio::fs::remove_file(&tmp_path).await;
+        // Explicit cleanup — log if removal fails rather than silently ignoring.
+        if let Err(e) = named_tmp.close() {
+            tracing::warn!(path = %tmp_str, err = %e, "failed to clean up temp file");
+        }
 
         match result {
             Ok((stdout, stderr)) => {

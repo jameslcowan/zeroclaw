@@ -25,6 +25,13 @@ def handle(msg):
         value   = params.get("value")
         if pin_num is None or value is None:
             return {"ok": False, "error": "missing pin or value"}
+        # Validate/cast pin_num to int (JSON may deliver it as float or string)
+        try:
+            pin_num = int(pin_num)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "invalid pin"}
+        if pin_num < 0:
+            return {"ok": False, "error": "invalid pin"}
         # Normalize value: accept bool or int, must resolve to 0 or 1.
         if isinstance(value, bool):
             value = int(value)
@@ -41,6 +48,13 @@ def handle(msg):
         pin_num = params.get("pin")
         if pin_num is None:
             return {"ok": False, "error": "missing pin"}
+        # Validate/cast pin_num to int
+        try:
+            pin_num = int(pin_num)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "invalid pin"}
+        if pin_num < 0:
+            return {"ok": False, "error": "invalid pin"}
         value = led.value() if pin_num == 25 else Pin(pin_num, Pin.IN).value()
         state = "HIGH" if value == 1 else "LOW"
         return {"ok": True, "data": {"pin": pin_num, "value": value, "state": state}}

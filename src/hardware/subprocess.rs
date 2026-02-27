@@ -177,8 +177,11 @@ impl Tool for SubprocessTool {
             }
         };
 
-        // Always kill the child after we finish reading (or on timeout/error).
+        // Kill child, wait for exit status, and collect stderr — done before
+        // the match so all error branches can include them.
         let _ = child.kill().await;
+        let child_status = child.wait().await.ok();
+        let stderr_msg = collect_stderr(stderr_handle).await;
 
         match read_result {
             // ── Timeout ────────────────────────────────────────────────────
@@ -186,8 +189,14 @@ impl Tool for SubprocessTool {
                 success: false,
                 output: String::new(),
                 error: Some(format!(
-                    "plugin '{}' timed out after {}s",
-                    self.manifest.tool.name, SUBPROCESS_TIMEOUT_SECS
+                    "plugin '{}' timed out after {}s{}",
+                    self.manifest.tool.name,
+                    SUBPROCESS_TIMEOUT_SECS,
+                    if stderr_msg.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; stderr: {}", stderr_msg)
+                    }
                 )),
             }),
 
@@ -196,8 +205,14 @@ impl Tool for SubprocessTool {
                 success: false,
                 output: String::new(),
                 error: Some(format!(
-                    "plugin '{}': I/O error reading stdout: {}",
-                    self.manifest.tool.name, io_err
+                    "plugin '{}': I/O error reading stdout: {}{}",
+                    self.manifest.tool.name,
+                    io_err,
+                    if stderr_msg.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; stderr: {}", stderr_msg)
+                    }
                 )),
             }),
 
@@ -206,8 +221,6 @@ impl Tool for SubprocessTool {
                 let line = line.trim();
 
                 if line.is_empty() {
-                    // Collect stderr for a useful error message.
-                    let stderr_msg = collect_stderr(stderr_handle).await;
                     return Ok(ToolResult {
                         success: false,
                         output: String::new(),
@@ -224,7 +237,29 @@ impl Tool for SubprocessTool {
                 }
 
                 match serde_json::from_str::<ToolResult>(line) {
-                    Ok(result) => Ok(result),
+                    Ok(result) => {
+                        // Non-zero exit overrides a parsed result: the plugin
+                        // signalled failure even if it wrote a success line.
+                        if let Some(status) = child_status {
+                            if !status.success() {
+                                return Ok(ToolResult {
+                                    success: false,
+                                    output: String::new(),
+                                    error: Some(format!(
+                                        "plugin '{}' exited with {}{}",
+                                        self.manifest.tool.name,
+                                        status,
+                                        if stderr_msg.is_empty() {
+                                            String::new()
+                                        } else {
+                                            format!("; stderr: {}", stderr_msg)
+                                        }
+                                    )),
+                                });
+                            }
+                        }
+                        Ok(result)
+                    }
                     Err(parse_err) => Ok(ToolResult {
                         success: false,
                         output: String::new(),
@@ -377,24 +412,13 @@ mod tests {
 
     /// A binary that hangs forever should be killed and return a timeout error.
     #[tokio::test]
+    #[ignore = "slow: waits SUBPROCESS_TIMEOUT_SECS (~10 s) to elapse — run manually"]
     async fn execute_timeout_kills_process_and_returns_error() {
-        // `sleep 60` will never finish within 10 s — but we shorten the
-        // timeout by pointing at a custom async test that uses a 1-second
-        // timeout via the constant. To avoid making the real test slow, we
-        // test the timeout *path* by mocking a sleeping script.
-        //
-        // NOTE: We rely on SUBPROCESS_TIMEOUT_SECS = 10 s here; this test
-        // would be slow if run in the default configuration.  Skip in CI with
-        // `#[ignore]` so the rest of the suite is fast.
-        //
-        // The key assertion is structural (error contains "timed out") once
-        // the timeout fires, so the test is self-contained when run manually.
-
-        // We exercise the empty-output path instead (instant, deterministic).
+        // Script sleeps forever — SubprocessTool should kill it and return a
+        // "timed out" error once SUBPROCESS_TIMEOUT_SECS elapses.
         let dir = tempfile::tempdir().unwrap();
         let script_path = dir.path().join("tool.sh");
-        // Script exits 0 but writes nothing to stdout.
-        std::fs::write(&script_path, "#!/bin/sh\n").unwrap();
+        std::fs::write(&script_path, "#!/bin/sh\nsleep 60\n").unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -402,7 +426,7 @@ mod tests {
                 .unwrap();
         }
 
-        let m = make_manifest("empty_tool", vec![]);
+        let m = make_manifest("sleep_tool", vec![]);
         let tool = SubprocessTool::new(m, script_path);
         let result = tool
             .execute(serde_json::json!({}))
@@ -412,8 +436,8 @@ mod tests {
         assert!(!result.success);
         let err = result.error.unwrap();
         assert!(
-            err.contains("empty stdout") || err.contains("empty_tool"),
-            "unexpected error: {}",
+            err.contains("timed out"),
+            "expected 'timed out' in error, got: {}",
             err
         );
     }

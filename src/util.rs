@@ -139,7 +139,8 @@ mod tests {
 
 // ── Serial path allowlist ─────────────────────────────────────────────────────
 
-/// Allowed serial device path prefixes — reject arbitrary paths for security.
+/// Allowed serial device path prefixes — used as a fallback on platforms
+/// that are not explicitly handled below, and referenced in error messages.
 ///
 /// Shared between `hardware::serial` and `peripherals::serial` to keep the
 /// allowlist consistent across transport implementations.
@@ -153,8 +154,57 @@ pub const ALLOWED_SERIAL_PATH_PREFIXES: &[&str] = &[
     "COM",                // Windows
 ];
 
-/// Check whether a serial device path is in the allowed prefix list.
+/// Check whether a serial device path is in the allowed set.
+///
+/// On Linux and macOS an absolute path is required and a per-platform regex
+/// is applied so that only well-known USB-serial subordinate nodes are
+/// accepted.  On Windows the `COM\d{1,3}` form is matched.  All other
+/// platforms fall back to the prefix allowlist above.
 pub fn is_serial_path_allowed(path: &str) -> bool {
+    // ── Linux ─────────────────────────────────────────────────────────────
+    #[cfg(target_os = "linux")]
+    {
+        use std::sync::OnceLock;
+        if !std::path::Path::new(path).is_absolute() {
+            return false;
+        }
+        static PAT: OnceLock<regex::Regex> = OnceLock::new();
+        let re = PAT.get_or_init(|| {
+            regex::Regex::new(r"^/dev/tty(ACM|USB|S|AMA|MFD)\d+$").expect("valid regex")
+        });
+        return re.is_match(path);
+    }
+
+    // ── macOS ─────────────────────────────────────────────────────────────
+    #[cfg(target_os = "macos")]
+    {
+        use std::sync::OnceLock;
+        if !std::path::Path::new(path).is_absolute() {
+            return false;
+        }
+        static PAT: OnceLock<regex::Regex> = OnceLock::new();
+        let re = PAT.get_or_init(|| {
+            // Matches /dev/tty.usbmodem*, /dev/cu.usbmodem*,
+            //         /dev/tty.usbserial*, /dev/cu.usbserial*
+            regex::Regex::new(r"^/dev/(tty|cu)\.(usbmodem|usbserial)[^\x00/]*$")
+                .expect("valid regex")
+        });
+        return re.is_match(path);
+    }
+
+    // ── Windows ───────────────────────────────────────────────────────────
+    #[cfg(target_os = "windows")]
+    {
+        use std::sync::OnceLock;
+        static PAT: OnceLock<regex::Regex> = OnceLock::new();
+        let re = PAT.get_or_init(|| {
+            regex::Regex::new(r"^COM\d{1,3}$").expect("valid regex")
+        });
+        return re.is_match(path);
+    }
+
+    // ── Fallback (other platforms) ────────────────────────────────────────
+    #[allow(unreachable_code)]
     ALLOWED_SERIAL_PATH_PREFIXES
         .iter()
         .any(|p| path.starts_with(p))

@@ -107,7 +107,7 @@ pub async fn boot(peripherals: &crate::config::PeripheralsConfig) -> anyhow::Res
     // Pre-register config-specified serial boards not already found by USB
     // discovery. Transport opens lazily, so the port need not exist at boot.
     if peripherals.enabled {
-        let discovered_paths: std::collections::HashSet<String> = registry_inner
+        let mut discovered_paths: std::collections::HashSet<String> = registry_inner
             .all()
             .iter()
             .filter_map(|d| d.device_path.clone())
@@ -122,7 +122,7 @@ pub async fn boot(peripherals: &crate::config::PeripheralsConfig) -> anyhow::Res
                 _ => continue,
             };
             if discovered_paths.contains(&path) {
-                continue; // already registered by USB discovery
+                continue; // already registered by USB discovery or a previous config entry
             }
             let alias = registry_inner.register(
                 &board.board,
@@ -136,6 +136,8 @@ pub async fn boot(peripherals: &crate::config::PeripheralsConfig) -> anyhow::Res
             ) as std::sync::Arc<dyn transport::Transport>;
             let caps = DeviceCapabilities { gpio: true, ..DeviceCapabilities::default() };
             registry_inner.attach_transport(&alias, transport, caps);
+            // Mark path as registered so duplicate config entries are skipped.
+            discovered_paths.insert(path.clone());
             tracing::info!(
                 board = %board.board,
                 path = %path,

@@ -28,7 +28,7 @@ async fn send_request(port: &mut SerialStream, cmd: &str, params: Value) -> anyh
 
     tracing::info!(
         cmd = %cmd,
-        bytes = %line.trim(),
+        payload_len = line.len(),
         "serial write"
     );
 
@@ -44,7 +44,7 @@ async fn send_request(port: &mut SerialStream, cmd: &str, params: Value) -> anyh
         buf.push(b[0]);
     }
     let line_str = String::from_utf8_lossy(&buf);
-    tracing::info!(response = %line_str.trim(), "serial read");
+    tracing::info!(response_len = line_str.trim().len(), "serial read");
     let resp: Value = serde_json::from_str(line_str.trim())?;
     Ok(resp)
 }
@@ -57,17 +57,45 @@ pub(crate) struct SerialTransport {
 /// Timeout for serial request/response (seconds).
 const SERIAL_TIMEOUT_SECS: u64 = 5;
 
+/// Drain bytes from `port` until a newline (or 200 ms silence) to resync the
+/// wire protocol after a timeout — prevents a stale response from poisoning
+/// the next request.
+async fn drain_to_newline(port: &mut SerialStream) {
+    use tokio::io::AsyncReadExt;
+    let mut b = [0u8; 1];
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        async {
+            loop {
+                match port.read(&mut b).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) if b[0] == b'\n' => break,
+                    Ok(_) => {}
+                }
+            }
+        },
+    )
+    .await;
+}
+
 impl SerialTransport {
     async fn request(&self, cmd: &str, args: Value) -> anyhow::Result<ToolResult> {
         let mut port = self.port.lock().await;
-        let resp = tokio::time::timeout(
+        let resp = match tokio::time::timeout(
             std::time::Duration::from_secs(SERIAL_TIMEOUT_SECS),
-            send_request(&mut port, cmd, args),
+            send_request(&mut *port, cmd, args),
         )
         .await
-        .map_err(|_| {
-            anyhow::anyhow!("Serial request timed out after {}s", SERIAL_TIMEOUT_SECS)
-        })??;
+        {
+            Err(_) => {
+                drain_to_newline(&mut *port).await;
+                return Err(anyhow::anyhow!(
+                    "Serial request timed out after {}s",
+                    SERIAL_TIMEOUT_SECS
+                ));
+            }
+            Ok(result) => result?,
+        };
 
         let ok = resp["ok"].as_bool().unwrap_or(false);
         // Firmware responds with "data" object; stringify it for the tool output.

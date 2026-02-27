@@ -1108,7 +1108,7 @@ pub(crate) async fn run_tool_call_loop(
             let start = Instant::now();
             let result = if let Some(tool) = find_tool(tools_registry, &call.name) {
                 tracing::info!(tool = %call.name, "dispatching tool");
-                tracing::debug!(tool = %call.name, args = %call.arguments, "tool arguments");
+                tracing::debug!(tool = %call.name, "tool arguments redacted");
                 match tool.execute(call.arguments.clone()).await {
                     Ok(r) => {
                         observer.record_event(&ObserverEvent::ToolCall {
@@ -1274,23 +1274,8 @@ pub async fn run(
 
     // ── Hardware registry tools (Phase 4 ToolRegistry + plugins) ──
     let hw_boot = crate::hardware::boot(&config.peripherals).await?;
-    let hw_device_summary = hw_boot.device_summary.clone();
-    let mut hw_added_tool_names: Vec<String> = Vec::new();
-    if !hw_boot.tools.is_empty() {
-        // Deduplicate: peripheral tools take precedence for names like gpio_read/gpio_write.
-        let existing: std::collections::HashSet<String> =
-            tools_registry.iter().map(|t| t.name().to_string()).collect();
-        let new_hw_tools: Vec<Box<dyn Tool>> = hw_boot
-            .tools
-            .into_iter()
-            .filter(|t| !existing.contains(t.name()))
-            .collect();
-        if !new_hw_tools.is_empty() {
-            hw_added_tool_names = new_hw_tools.iter().map(|t| t.name().to_string()).collect();
-            tracing::info!(count = new_hw_tools.len(), "Hardware registry tools added");
-            tools_registry.extend(new_hw_tools);
-        }
-    }
+    let (hw_device_summary, hw_added_tool_names) =
+        crate::hardware::merge_hardware_tools(&mut tools_registry, hw_boot);
 
     // ── Resolve provider ─────────────────────────────────────────
     let provider_name = provider_override

@@ -350,6 +350,14 @@ impl DeviceRegistry {
             )
         })?;
 
+        // Verify the device advertises GPIO capability.
+        if !ctx.capabilities.gpio {
+            return Err(format!(
+                "device '{}' does not support GPIO; specify a GPIO-capable device",
+                device_alias
+            ));
+        }
+
         Ok((device_alias, ctx))
     }
 

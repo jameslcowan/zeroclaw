@@ -223,8 +223,11 @@ impl ToolRegistry {
     ///
     /// Used by [`crate::hardware::boot`] to hand tools off to the agent loop,
     /// which manages its own flat `Vec<Box<dyn Tool>>` registry.
+    /// Order is alphabetical by tool name for deterministic output.
     pub fn into_tools(self) -> Vec<Box<dyn Tool>> {
-        self.tools.into_values().collect()
+        let mut pairs: Vec<(String, Box<dyn Tool>)> = self.tools.into_iter().collect();
+        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+        pairs.into_iter().map(|(_, tool)| tool).collect()
     }
 }
 

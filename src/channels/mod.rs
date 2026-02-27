@@ -1216,8 +1216,16 @@ pub async fn start_channels(config: Config) -> Result<()> {
     let peripheral_tools =
         crate::peripherals::create_peripheral_tools(&config.peripherals).await?;
     if !peripheral_tools.is_empty() {
-        tracing::info!(count = peripheral_tools.len(), "Peripheral tools added (channels)");
-        tools_vec.extend(peripheral_tools);
+        let existing_names: std::collections::HashSet<String> =
+            tools_vec.iter().map(|t| t.name().to_string()).collect();
+        let new_tools: Vec<_> = peripheral_tools
+            .into_iter()
+            .filter(|t| !existing_names.contains(t.name()))
+            .collect();
+        if !new_tools.is_empty() {
+            tracing::info!(count = new_tools.len(), "Peripheral tools added (channels)");
+            tools_vec.extend(new_tools);
+        }
     }
 
     // ── Hardware registry tools (Phase 4 ToolRegistry + plugins) ──

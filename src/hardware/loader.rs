@@ -301,8 +301,9 @@ binary = "tool.sh"
     fn plugin_tools_dir_returns_path_ending_in_zeroclaw_tools() {
         let path = plugin_tools_dir().expect("should resolve");
         let display = path.to_string_lossy();
+        let expected = std::path::Path::new(".zeroclaw").join("tools");
         assert!(
-            display.ends_with("/.zeroclaw/tools"),
+            path.ends_with(&expected),
             "unexpected path: {}",
             display
         );
