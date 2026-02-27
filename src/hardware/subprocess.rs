@@ -28,6 +28,10 @@ use tokio::time::{timeout, Duration};
 /// Subprocess timeout — kill the child process after this many seconds.
 const SUBPROCESS_TIMEOUT_SECS: u64 = 10;
 
+/// Timeout for waiting on child process exit after stdout has been read.
+/// Prevents a hung cleanup phase from blocking indefinitely.
+const PROCESS_EXIT_TIMEOUT_SECS: u64 = 5;
+
 /// A tool backed by an external subprocess.
 ///
 /// The binary receives the LLM-supplied JSON arguments on stdin (one line,
@@ -226,7 +230,13 @@ impl Tool for SubprocessTool {
             // Let the process finish naturally — plugins that write their
             // result and then do cleanup should not be interrupted.
             Ok(Ok(line)) => {
-                let child_status = child.wait().await.ok();
+                let child_status = timeout(
+                    Duration::from_secs(PROCESS_EXIT_TIMEOUT_SECS),
+                    child.wait(),
+                )
+                .await
+                .ok()
+                .and_then(|r| r.ok());
                 let stderr_msg = collect_stderr(stderr_handle).await;
                 let line = line.trim();
 

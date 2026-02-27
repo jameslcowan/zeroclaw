@@ -673,7 +673,16 @@ fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) {
             }
 
             if !parsed_any {
-                tracing::warn!("Malformed <tool_call> JSON: expected tool-call object in tag body");
+                // Fallback: try shorthand `toolname{args}` format inside the closed tag.
+                if let Some(call) = parse_shorthand_tag_call(inner) {
+                    tracing::debug!(
+                        tool = %call.name,
+                        "parsed shorthand tool call (toolname{{args}} format)"
+                    );
+                    calls.push(call);
+                } else {
+                    tracing::warn!("Malformed <tool_call> JSON: expected tool-call object in tag body");
+                }
             }
 
             remaining = &after_open[close_idx + close_tag.len()..];

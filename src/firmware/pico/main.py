@@ -52,9 +52,13 @@ def handle(msg):
         if pin_num == 25:
             led.value(value)
         else:
-            # Always (re-)configure as OUT so subsequent reads on this pin
-            # reflect the driven state rather than clobbering the direction.
-            pins_cache[pin_num] = Pin(pin_num, Pin.OUT)
+            # Reuse a cached Pin object when available to avoid repeated
+            # allocations; re-initialise direction to OUT in case it was
+            # previously opened as IN by gpio_read.
+            if pin_num in pins_cache:
+                pins_cache[pin_num].init(mode=Pin.OUT)
+            else:
+                pins_cache[pin_num] = Pin(pin_num, Pin.OUT)
             pins_cache[pin_num].value(value)
         state = "HIGH" if value == 1 else "LOW"
         return {"ok": True, "data": {"pin": pin_num, "value": value, "state": state}}
@@ -88,9 +92,11 @@ while True:
         msg    = json.loads(line)
         result = handle(msg)
         print(json.dumps(result))
-    except (ValueError, KeyError, TypeError) as e:
-        # ValueError   — json.loads() on malformed input
-        # KeyError     — unexpected missing key in a message dict
-        # TypeError    — wrong type in an operation
+    except (ValueError, KeyError, TypeError, OSError, AttributeError) as e:
+        # ValueError      — json.loads() on malformed input
+        # KeyError        — unexpected missing key in a message dict
+        # TypeError       — wrong type in an operation
+        # OSError         — GPIO/hardware errors from Pin()/Pin.value()
+        # AttributeError  — msg.get(...) called on non-dict JSON value
         # Any other exception propagates so bugs surface during development.
         print(json.dumps({"ok": False, "error": str(e)}))

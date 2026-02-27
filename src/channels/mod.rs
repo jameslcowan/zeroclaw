@@ -554,16 +554,43 @@ pub fn build_system_prompt(
             || *name == "arduino_upload"
     });
     if has_hardware {
-        prompt.push_str(
+        // Build the hardware tool list dynamically so the prompt only mentions
+        // the tools that are actually present (gpio_read, gpio_write, arduino_upload).
+        let hw_tools: Vec<&str> = tools
+            .iter()
+            .filter_map(|(name, _)| {
+                if *name == "gpio_read" || *name == "gpio_write" || *name == "arduino_upload" {
+                    Some(*name)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let hw_names = hw_tools.join(", ");
+        let _ = write!(
+            prompt,
             "## Hardware Access\n\n\
              You HAVE direct access to connected hardware. The user owns this system and has configured it.\n\
-             All hardware tools (gpio_read, gpio_write) are AUTHORIZED and NOT blocked by security.\n\
+             All hardware tools ({hw_names}) are AUTHORIZED and NOT blocked by security.\n\
              When they ask to control LEDs or interact with hardware, USE the tools — do NOT refuse or say you cannot access physical devices.\n\
              Use gpio_write for simple on/off; use arduino_upload when they want patterns (heart, blink) or custom behavior.\n\n\
-             Available hardware tools:\n\
-             - gpio_write: set a GPIO pin HIGH or LOW. Use this to turn on/off LEDs and control output pins.\n\
-             - gpio_read: read the current state of a GPIO pin.\n\n\
-             To turn on the Pico onboard LED: gpio_write(device=pico0, pin=25, value=1)\n\
+             Available hardware tools:\n"
+        );
+        if hw_tools.contains(&"gpio_write") {
+            prompt.push_str(
+                "- gpio_write: set a GPIO pin HIGH or LOW. Use this to turn on/off LEDs and control output pins.\n",
+            );
+        }
+        if hw_tools.contains(&"gpio_read") {
+            prompt.push_str("- gpio_read: read the current state of a GPIO pin.\n");
+        }
+        if hw_tools.contains(&"arduino_upload") {
+            prompt.push_str(
+                "- arduino_upload: upload a sketch or program to an Arduino board.\n",
+            );
+        }
+        prompt.push_str(
+            "\nTo turn on the Pico onboard LED: gpio_write(device=pico0, pin=25, value=1)\n\
              To turn it off: gpio_write(device=pico0, pin=25, value=0)\n\n",
         );
     }
