@@ -187,6 +187,18 @@ impl BrowserConfigTool {
         base.retain(|backend| !removal_set.contains(backend));
     }
 
+    fn merge_domains(base: &mut Vec<String>, additions: Vec<String>) {
+        let mut merged = std::mem::take(base);
+        merged.extend(additions);
+        *base = normalize_allowed_domains(merged);
+    }
+
+    fn remove_domains(base: &mut Vec<String>, removals: Vec<String>) {
+        let removal_set: HashSet<String> =
+            normalize_allowed_domains(removals).into_iter().collect();
+        base.retain(|entry| !removal_set.contains(entry));
+    }
+
     fn normalize_freeform_list(values: Vec<String>) -> Vec<String> {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
@@ -289,30 +301,46 @@ impl BrowserConfigTool {
                 normalize_allowed_domains(Self::parse_string_list(raw, "allowed_domains")?);
         }
 
-        if let Some(raw) = args.get("browser_open") {
-            let value = raw
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("'browser_open' must be a string"))?;
-            let normalized = Self::normalize_browser_open(value).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Invalid browser_open '{}'. Supported: disable, brave, chrome, firefox, edge, default",
-                    value
-                )
-            })?;
-            browser.browser_open = normalized.to_string();
+        if let Some(raw) = args.get("add_allowed_domains") {
+            Self::merge_domains(
+                &mut browser.allowed_domains,
+                Self::parse_string_list(raw, "add_allowed_domains")?,
+            );
         }
 
-        if let Some(raw) = args.get("backend") {
-            let value = raw
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("'backend' must be a string"))?;
-            let normalized = Self::normalize_backend(value).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Invalid backend '{}'. Supported: agent_browser, rust_native, computer_use, auto",
-                    value
-                )
-            })?;
-            browser.backend = normalized.to_string();
+        if let Some(raw) = args.get("remove_allowed_domains") {
+            Self::remove_domains(
+                &mut browser.allowed_domains,
+                Self::parse_string_list(raw, "remove_allowed_domains")?,
+            );
+        }
+
+        match Self::parse_optional_string_update(args, "browser_open")? {
+            MaybeSet::Set(value) => {
+                let normalized = Self::normalize_browser_open(&value).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Invalid browser_open '{}'. Supported: disable, brave, chrome, firefox, edge, default",
+                        value
+                    )
+                })?;
+                browser.browser_open = normalized.to_string();
+            }
+            MaybeSet::Null => browser.browser_open = "default".to_string(),
+            MaybeSet::Unset => {}
+        }
+
+        match Self::parse_optional_string_update(args, "backend")? {
+            MaybeSet::Set(value) => {
+                let normalized = Self::normalize_backend(&value).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Invalid backend '{}'. Supported: agent_browser, rust_native, computer_use, auto",
+                        value
+                    )
+                })?;
+                browser.backend = normalized.to_string();
+            }
+            MaybeSet::Null => browser.backend = "agent_browser".to_string(),
+            MaybeSet::Unset => {}
         }
 
         if let Some(raw) = args.get("auto_backend_priority") {
@@ -469,9 +497,21 @@ impl Tool for BrowserConfigTool {
                         {"type": "array", "items": {"type": "string"}}
                     ]
                 },
-                "browser_open": {"type": "string"},
+                "add_allowed_domains": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
+                "remove_allowed_domains": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
+                "browser_open": {"type": ["string", "null"]},
                 "session_name": {"type": ["string", "null"]},
-                "backend": {"type": "string"},
+                "backend": {"type": ["string", "null"]},
                 "auto_backend_priority": {
                     "anyOf": [
                         {"type": "string"},
@@ -624,6 +664,8 @@ mod tests {
             .execute(json!({
                 "action": "set",
                 "session_name": "team-browser",
+                "backend": "computer_use",
+                "browser_open": "brave",
                 "native_chrome_path": "/usr/bin/google-chrome",
                 "computer_use_api_key": "secret-token",
                 "computer_use_max_coordinate_x": 1920
@@ -636,6 +678,8 @@ mod tests {
             .execute(json!({
                 "action": "set",
                 "session_name": null,
+                "backend": null,
+                "browser_open": null,
                 "native_chrome_path": null,
                 "computer_use_api_key": null,
                 "computer_use_max_coordinate_x": null
@@ -647,6 +691,8 @@ mod tests {
         let output: Value = serde_json::from_str(&cleared.output).unwrap();
         let browser = &output["browser"];
         assert!(browser["session_name"].is_null());
+        assert_eq!(browser["backend"], json!("agent_browser"));
+        assert_eq!(browser["browser_open"], json!("default"));
         assert!(browser["native_chrome_path"].is_null());
         assert!(browser["computer_use"]["max_coordinate_x"].is_null());
         assert_eq!(browser["computer_use"]["api_key_configured"], json!(false));
@@ -665,5 +711,36 @@ mod tests {
             .await
             .expect_err("unknown backend should fail");
         assert!(err.to_string().contains("Invalid backend"));
+    }
+
+    #[tokio::test]
+    async fn set_supports_add_and_remove_allowed_domains() {
+        let tmp = TempDir::new().unwrap();
+        let tool = BrowserConfigTool::new(test_config(&tmp).await, test_security());
+
+        let first = tool
+            .execute(json!({
+                "action": "set",
+                "allowed_domains": ["example.com"],
+                "add_allowed_domains": ["docs.rs", "api.example.com"]
+            }))
+            .await
+            .unwrap();
+        assert!(first.success, "{:?}", first.error);
+
+        let second = tool
+            .execute(json!({
+                "action": "set",
+                "remove_allowed_domains": ["example.com"]
+            }))
+            .await
+            .unwrap();
+        assert!(second.success, "{:?}", second.error);
+
+        let output: Value = serde_json::from_str(&second.output).unwrap();
+        assert_eq!(
+            output["browser"]["allowed_domains"],
+            json!(["api.example.com", "docs.rs"])
+        );
     }
 }

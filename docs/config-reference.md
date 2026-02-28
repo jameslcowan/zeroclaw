@@ -592,10 +592,12 @@ Notes:
 Notes:
 
 - `browser_open` is a simple URL opener; `browser` is full browser automation (open/click/type/scroll/screenshot).
+- Default browser automation backend is `agent_browser`.
 - When `backend = "computer_use"`, the agent delegates browser actions to the sidecar at `computer_use.endpoint`.
 - `allow_remote_endpoint = false` (default) rejects any non-loopback endpoint to prevent accidental public exposure.
 - Use `window_allowlist` to restrict which OS windows the sidecar can interact with.
 - Agents can modify these settings at runtime via `browser_config` (`action=get|set|list_backends`).
+- Browser automation here uses `agent-browser`, rust-native WebDriver, or `computer_use` sidecar; it does not depend on Playwright/Selenium backends.
 
 Runtime workflow (`browser_config`):
 
@@ -609,6 +611,14 @@ Runtime workflow (`browser_config`):
 
 ```json
 {"action":"set","allowed_domains":["docs.rs","github.com"],"agent_browser_timeout_ms":45000}
+```
+
+```json
+{"action":"set","add_allowed_domains":["news.ycombinator.com"],"remove_allowed_domains":["github.com"]}
+```
+
+```json
+{"action":"set","backend":null,"browser_open":null}
 ```
 
 ## `[http_request]`
