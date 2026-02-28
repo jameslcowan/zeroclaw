@@ -194,12 +194,32 @@ Channel runtime also watches `config.toml` and hot-applies updates to:
 - `zeroclaw skills install <source>`
 - `zeroclaw skills remove <name>`
 
-`<source>` accepts git remotes (`https://...`, `http://...`, `ssh://...`, and `git@host:owner/repo.git`) or a local filesystem path.
+`<source>` accepts:
+
+| Format | Example | Notes |
+|---|---|---|
+| **Preloaded alias** | `find-skills` | Resolved via `<workspace>/skills/.download-policy.toml` aliases |
+| **skills.sh URL** | `https://skills.sh/vercel-labs/skills/find-skills` | Parses `owner/repo/skill`, clones source repo, installs the selected skill subdirectory |
+| **Git remotes** | `https://github.com/…`, `git@host:owner/repo.git` | Cloned with `git clone --depth 1` |
+| **Local filesystem paths** | `./my-skill` or `/abs/path/skill` | Directory copied and audited |
+
+**Domain trust gate (URL installs):**
+- First time a URL-based install hits an unseen domain, ZeroClaw asks whether you trust that domain.
+- Trust decisions are persisted in `<workspace>/skills/.download-policy.toml`.
+- Trusted domains allow future downloads on the same domain/subdomains; blocked domains are denied automatically.
+- Built-in defaults are transparent: preloaded bundles ship in repository `/skills/` and are copied to `<workspace>/skills/` on initialization.
+- To pre-configure behavior, edit:
+  - `aliases` (custom source shortcuts)
+  - `trusted_domains`
+  - `blocked_domains`
 
 `skills install` always runs a built-in static security audit before the skill is accepted. The audit blocks:
 - symlinks inside the skill package
 - script-like files (`.sh`, `.bash`, `.zsh`, `.ps1`, `.bat`, `.cmd`)
 - high-risk command snippets (for example pipe-to-shell payloads)
+- prompt-injection override/exfiltration patterns
+- phishing-style credential harvesting patterns
+- obfuscated backdoor payload patterns (for example base64 decode-and-exec)
 - markdown links that escape the skill root, point to remote markdown, or target script files
 
 Use `skills audit` to manually validate a candidate skill directory (or an installed skill by name) before sharing it.
