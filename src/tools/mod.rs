@@ -53,6 +53,7 @@ pub mod memory_recall;
 pub mod memory_store;
 pub mod model_routing_config;
 pub mod pdf_read;
+pub mod pptx_read;
 pub mod process;
 pub mod proxy_config;
 pub mod pushover;
@@ -106,6 +107,7 @@ pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
 pub use model_routing_config::ModelRoutingConfigTool;
 pub use pdf_read::PdfReadTool;
+pub use pptx_read::PptxReadTool;
 pub use process::ProcessTool;
 pub use proxy_config::ProxyConfigTool;
 pub use pushover::PushoverTool;
@@ -400,6 +402,9 @@ pub fn all_tools_with_runtime(
 
     // DOCX text extraction
     tool_arcs.push(Arc::new(DocxReadTool::new(security.clone())));
+
+    // PPTX text extraction
+    tool_arcs.push(Arc::new(PptxReadTool::new(security.clone())));
 
     // Vision tools are always available
     tool_arcs.push(Arc::new(ScreenshotTool::new(security.clone())));
