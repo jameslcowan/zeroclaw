@@ -59,6 +59,7 @@ Tip:
 
 - In interactive chat, you can ask for route changes in natural language (for example “conversation uses kimi, coding uses gpt-5.3-codex”); the assistant can persist this via tool `model_routing_config`.
 - In interactive chat, you can also ask to:
+  - inspect or update browser automation settings (`browser_config`)
   - switch web search provider/fallbacks (`web_search_config`)
   - inspect or update domain access policy (`web_access_config`)
 

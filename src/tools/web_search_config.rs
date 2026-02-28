@@ -166,13 +166,28 @@ impl WebSearchConfigTool {
         Ok(out)
     }
 
+    fn merge_provider_list(base: &mut Vec<String>, additions: Vec<String>) {
+        for provider in additions {
+            if !base.contains(&provider) {
+                base.push(provider);
+            }
+        }
+    }
+
+    fn remove_provider_list(base: &mut Vec<String>, removals: Vec<String>) {
+        let removal_set: HashSet<String> = removals.into_iter().collect();
+        base.retain(|provider| !removal_set.contains(provider));
+    }
+
     fn snapshot(cfg: &WebSearchConfig) -> Value {
         json!({
             "enabled": cfg.enabled,
             "provider": cfg.provider,
             "fallback_providers": cfg.fallback_providers,
+            "api_url": cfg.api_url,
             "max_results": cfg.max_results,
             "timeout_secs": cfg.timeout_secs,
+            "user_agent": cfg.user_agent,
             "retries_per_provider": cfg.retries_per_provider,
             "retry_backoff_ms": cfg.retry_backoff_ms,
             "domain_filter": cfg.domain_filter,
@@ -217,11 +232,21 @@ impl WebSearchConfigTool {
                         "provider": "perplexity",
                         "fallback_providers": ["exa", "jina", "duckduckgo"]
                     },
+                    "add_remove_fallbacks": {
+                        "action": "set",
+                        "add_fallback_providers": ["exa", "jina"],
+                        "remove_fallback_providers": ["duckduckgo"]
+                    },
                     "set_exa": {
                         "action": "set",
                         "provider": "exa",
                         "exa_search_type": "neural",
                         "exa_include_text": true
+                    },
+                    "set_transport": {
+                        "action": "set",
+                        "api_url": "https://api.perplexity.ai",
+                        "user_agent": "ZeroClaw/1.0"
                     }
                 }
             }))?,
@@ -256,6 +281,22 @@ impl WebSearchConfigTool {
             let list = Self::parse_string_list(raw, "fallback_providers")?;
             cfg.web_search.fallback_providers =
                 Self::normalize_provider_list(list, "fallback_providers")?;
+        }
+
+        if let Some(raw) = args.get("add_fallback_providers") {
+            let additions = Self::normalize_provider_list(
+                Self::parse_string_list(raw, "add_fallback_providers")?,
+                "add_fallback_providers",
+            )?;
+            Self::merge_provider_list(&mut cfg.web_search.fallback_providers, additions);
+        }
+
+        if let Some(raw) = args.get("remove_fallback_providers") {
+            let removals = Self::normalize_provider_list(
+                Self::parse_string_list(raw, "remove_fallback_providers")?,
+                "remove_fallback_providers",
+            )?;
+            Self::remove_provider_list(&mut cfg.web_search.fallback_providers, removals);
         }
 
         if let Some(raw) = args.get("domain_filter") {
@@ -362,6 +403,12 @@ impl WebSearchConfigTool {
             MaybeSet::Unset => {}
         }
 
+        match Self::parse_optional_string_update(args, "api_url")? {
+            MaybeSet::Set(value) => cfg.web_search.api_url = Some(value),
+            MaybeSet::Null => cfg.web_search.api_url = None,
+            MaybeSet::Unset => {}
+        }
+
         match Self::parse_optional_string_update(args, "brave_api_key")? {
             MaybeSet::Set(value) => cfg.web_search.brave_api_key = Some(value),
             MaybeSet::Null => cfg.web_search.brave_api_key = None,
@@ -385,6 +432,17 @@ impl WebSearchConfigTool {
             MaybeSet::Null => cfg.web_search.jina_api_key = None,
             MaybeSet::Unset => {}
         }
+
+        match Self::parse_optional_string_update(args, "user_agent")? {
+            MaybeSet::Set(value) => cfg.web_search.user_agent = value,
+            MaybeSet::Null => cfg.web_search.user_agent = "ZeroClaw/1.0".to_string(),
+            MaybeSet::Unset => {}
+        }
+
+        // Keep fallback chain focused on true fallbacks.
+        cfg.web_search
+            .fallback_providers
+            .retain(|provider| provider != &cfg.web_search.provider);
 
         cfg.save().await?;
 
@@ -426,11 +484,25 @@ impl Tool for WebSearchConfigTool {
                         {"type": "array", "items": {"type": "string"}}
                     ]
                 },
+                "add_fallback_providers": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
+                "remove_fallback_providers": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
                 "api_key": {"type": ["string", "null"]},
+                "api_url": {"type": ["string", "null"]},
                 "brave_api_key": {"type": ["string", "null"]},
                 "perplexity_api_key": {"type": ["string", "null"]},
                 "exa_api_key": {"type": ["string", "null"]},
                 "jina_api_key": {"type": ["string", "null"]},
+                "user_agent": {"type": ["string", "null"]},
                 "max_results": {"type": "integer", "minimum": 1, "maximum": 10},
                 "timeout_secs": {"type": "integer", "minimum": 1},
                 "retries_per_provider": {"type": "integer", "minimum": 0, "maximum": 5},
@@ -552,7 +624,7 @@ mod tests {
         assert_eq!(web_search["provider"], json!("duckduckgo"));
         assert_eq!(
             web_search["fallback_providers"],
-            json!(["exa", "jina", "perplexity", "duckduckgo"])
+            json!(["exa", "jina", "perplexity"])
         );
         assert_eq!(web_search["exa_search_type"], json!("neural"));
         assert_eq!(web_search["exa_include_text"], json!(true));
@@ -575,5 +647,31 @@ mod tests {
             .await
             .expect_err("unknown provider should fail");
         assert!(err.to_string().contains("Invalid provider"));
+    }
+
+    #[tokio::test]
+    async fn set_supports_add_remove_fallback_and_transport_options() {
+        let tmp = TempDir::new().unwrap();
+        let tool = WebSearchConfigTool::new(test_config(&tmp).await, test_security());
+
+        let result = tool
+            .execute(json!({
+                "action": "set",
+                "provider": "perplexity",
+                "add_fallback_providers": ["exa", "jina", "duckduckgo"],
+                "remove_fallback_providers": ["duckduckgo"],
+                "api_url": "https://api.perplexity.ai",
+                "user_agent": "ZeroClaw-Test/2.0"
+            }))
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.error);
+
+        let output: Value = serde_json::from_str(&result.output).unwrap();
+        let web_search = &output["web_search"];
+        assert_eq!(web_search["provider"], json!("perplexity"));
+        assert_eq!(web_search["fallback_providers"], json!(["exa", "jina"]));
+        assert_eq!(web_search["api_url"], json!("https://api.perplexity.ai"));
+        assert_eq!(web_search["user_agent"], json!("ZeroClaw-Test/2.0"));
     }
 }

@@ -18,6 +18,7 @@
 pub mod agents_ipc;
 pub mod apply_patch;
 pub mod browser;
+pub mod browser_config;
 pub mod browser_open;
 pub mod cli_discovery;
 pub mod composio;
@@ -78,6 +79,7 @@ pub mod web_search_tool;
 
 pub use apply_patch::ApplyPatchTool;
 pub use browser::{BrowserTool, ComputerUseConfig};
+pub use browser_config::BrowserConfigTool;
 pub use browser_open::BrowserOpenTool;
 pub use composio::ComposioTool;
 pub use content_search::ContentSearchTool;
@@ -287,6 +289,7 @@ pub fn all_tools_with_runtime(
             config.clone(),
             security.clone(),
         )),
+        Arc::new(BrowserConfigTool::new(config.clone(), security.clone())),
         Arc::new(ProxyConfigTool::new(config.clone(), security.clone())),
         Arc::new(WebAccessConfigTool::new(config.clone(), security.clone())),
         Arc::new(WebSearchConfigTool::new(config.clone(), security.clone())),
@@ -663,6 +666,7 @@ mod tests {
         assert!(names.contains(&"schedule"));
         assert!(names.contains(&"model_routing_config"));
         assert!(names.contains(&"pushover"));
+        assert!(names.contains(&"browser_config"));
         assert!(names.contains(&"proxy_config"));
         assert!(names.contains(&"web_access_config"));
         assert!(names.contains(&"web_search_config"));
@@ -707,6 +711,7 @@ mod tests {
         assert!(names.contains(&"content_search"));
         assert!(names.contains(&"model_routing_config"));
         assert!(names.contains(&"pushover"));
+        assert!(names.contains(&"browser_config"));
         assert!(names.contains(&"proxy_config"));
         assert!(names.contains(&"web_access_config"));
         assert!(names.contains(&"web_search_config"));

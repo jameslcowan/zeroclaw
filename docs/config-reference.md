@@ -595,6 +595,21 @@ Notes:
 - When `backend = "computer_use"`, the agent delegates browser actions to the sidecar at `computer_use.endpoint`.
 - `allow_remote_endpoint = false` (default) rejects any non-loopback endpoint to prevent accidental public exposure.
 - Use `window_allowlist` to restrict which OS windows the sidecar can interact with.
+- Agents can modify these settings at runtime via `browser_config` (`action=get|set|list_backends`).
+
+Runtime workflow (`browser_config`):
+
+```json
+{"action":"list_backends"}
+```
+
+```json
+{"action":"set","enabled":true,"backend":"auto","auto_backend_priority":["agent_browser","rust_native","computer_use"]}
+```
+
+```json
+{"action":"set","allowed_domains":["docs.rs","github.com"],"agent_browser_timeout_ms":45000}
+```
 
 ## `[http_request]`
 
@@ -700,7 +715,13 @@ Runtime workflow (`web_search_config`):
 {"action":"set","provider":"perplexity","fallback_providers":["exa","jina","duckduckgo"]}
 ```
 
-3. Tune provider-specific options:
+3. Add or remove fallback providers incrementally:
+
+```json
+{"action":"set","add_fallback_providers":["exa","jina"],"remove_fallback_providers":["duckduckgo"]}
+```
+
+4. Tune provider-specific options:
 
 ```json
 {"action":"set","exa_search_type":"neural","exa_include_text":true}
@@ -710,7 +731,13 @@ Runtime workflow (`web_search_config`):
 {"action":"set","jina_site_filters":["docs.rs","github.com"]}
 ```
 
-4. Add geo/language/recency filters for region-aware queries:
+5. Tune transport and identity headers:
+
+```json
+{"action":"set","api_url":"https://api.perplexity.ai","user_agent":"ZeroClaw/1.0"}
+```
+
+6. Add geo/language/recency filters for region-aware queries:
 
 ```json
 {"action":"set","country":"US","language_filter":["en"],"recency_filter":"week"}
