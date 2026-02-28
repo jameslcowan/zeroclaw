@@ -1567,9 +1567,6 @@ pub fn create_routed_provider_with_options(
         }
     }
 
-    // Keep only successfully initialized routed providers and preserve
-    // their provider-id bindings (e.g. "<provider>#<hint>").
-
     Ok(Box::new(
         router::RouterProvider::new(providers, routes, default_model.to_string())
             .with_vision_override(options.model_support_vision),
