@@ -179,6 +179,37 @@ impl WebSearchConfigTool {
         base.retain(|provider| !removal_set.contains(provider));
     }
 
+    fn normalize_freeform_list(values: Vec<String>) -> Vec<String> {
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for value in values {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let normalized = trimmed.to_string();
+            if seen.insert(normalized.clone()) {
+                out.push(normalized);
+            }
+        }
+        out
+    }
+
+    fn merge_freeform_list(base: &mut Vec<String>, additions: Vec<String>) {
+        for value in Self::normalize_freeform_list(additions) {
+            if !base.contains(&value) {
+                base.push(value);
+            }
+        }
+    }
+
+    fn remove_freeform_list(base: &mut Vec<String>, removals: Vec<String>) {
+        let removal_set: HashSet<String> = Self::normalize_freeform_list(removals)
+            .into_iter()
+            .collect();
+        base.retain(|entry| !removal_set.contains(entry));
+    }
+
     fn snapshot(cfg: &WebSearchConfig) -> Value {
         json!({
             "enabled": cfg.enabled,
@@ -247,6 +278,13 @@ impl WebSearchConfigTool {
                         "action": "set",
                         "api_url": "https://api.perplexity.ai",
                         "user_agent": "ZeroClaw/1.0"
+                    },
+                    "incremental_filters": {
+                        "action": "set",
+                        "add_domain_filter": ["docs.rs", "github.com"],
+                        "remove_domain_filter": ["example.com"],
+                        "add_language_filter": ["en"],
+                        "add_jina_site_filters": ["docs.rs"]
                     }
                 }
             }))?,
@@ -300,15 +338,60 @@ impl WebSearchConfigTool {
         }
 
         if let Some(raw) = args.get("domain_filter") {
-            cfg.web_search.domain_filter = Self::parse_string_list(raw, "domain_filter")?;
+            cfg.web_search.domain_filter =
+                Self::normalize_freeform_list(Self::parse_string_list(raw, "domain_filter")?);
+        }
+
+        if let Some(raw) = args.get("add_domain_filter") {
+            Self::merge_freeform_list(
+                &mut cfg.web_search.domain_filter,
+                Self::parse_string_list(raw, "add_domain_filter")?,
+            );
+        }
+
+        if let Some(raw) = args.get("remove_domain_filter") {
+            Self::remove_freeform_list(
+                &mut cfg.web_search.domain_filter,
+                Self::parse_string_list(raw, "remove_domain_filter")?,
+            );
         }
 
         if let Some(raw) = args.get("language_filter") {
-            cfg.web_search.language_filter = Self::parse_string_list(raw, "language_filter")?;
+            cfg.web_search.language_filter =
+                Self::normalize_freeform_list(Self::parse_string_list(raw, "language_filter")?);
+        }
+
+        if let Some(raw) = args.get("add_language_filter") {
+            Self::merge_freeform_list(
+                &mut cfg.web_search.language_filter,
+                Self::parse_string_list(raw, "add_language_filter")?,
+            );
+        }
+
+        if let Some(raw) = args.get("remove_language_filter") {
+            Self::remove_freeform_list(
+                &mut cfg.web_search.language_filter,
+                Self::parse_string_list(raw, "remove_language_filter")?,
+            );
         }
 
         if let Some(raw) = args.get("jina_site_filters") {
-            cfg.web_search.jina_site_filters = Self::parse_string_list(raw, "jina_site_filters")?;
+            cfg.web_search.jina_site_filters =
+                Self::normalize_freeform_list(Self::parse_string_list(raw, "jina_site_filters")?);
+        }
+
+        if let Some(raw) = args.get("add_jina_site_filters") {
+            Self::merge_freeform_list(
+                &mut cfg.web_search.jina_site_filters,
+                Self::parse_string_list(raw, "add_jina_site_filters")?,
+            );
+        }
+
+        if let Some(raw) = args.get("remove_jina_site_filters") {
+            Self::remove_freeform_list(
+                &mut cfg.web_search.jina_site_filters,
+                Self::parse_string_list(raw, "remove_jina_site_filters")?,
+            );
         }
 
         if let Some(max_results) = args.get("max_results") {
@@ -513,7 +596,31 @@ impl Tool for WebSearchConfigTool {
                         {"type": "array", "items": {"type": "string"}}
                     ]
                 },
+                "add_domain_filter": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
+                "remove_domain_filter": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
                 "language_filter": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
+                "add_language_filter": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
+                "remove_language_filter": {
                     "anyOf": [
                         {"type": "string"},
                         {"type": "array", "items": {"type": "string"}}
@@ -526,6 +633,18 @@ impl Tool for WebSearchConfigTool {
                 "exa_search_type": {"type": "string", "enum": ["auto", "keyword", "neural"]},
                 "exa_include_text": {"type": "boolean"},
                 "jina_site_filters": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
+                "add_jina_site_filters": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
+                "remove_jina_site_filters": {
                     "anyOf": [
                         {"type": "string"},
                         {"type": "array", "items": {"type": "string"}}
@@ -673,5 +792,42 @@ mod tests {
         assert_eq!(web_search["fallback_providers"], json!(["exa", "jina"]));
         assert_eq!(web_search["api_url"], json!("https://api.perplexity.ai"));
         assert_eq!(web_search["user_agent"], json!("ZeroClaw-Test/2.0"));
+    }
+
+    #[tokio::test]
+    async fn set_supports_incremental_filter_updates() {
+        let tmp = TempDir::new().unwrap();
+        let tool = WebSearchConfigTool::new(test_config(&tmp).await, test_security());
+
+        let first = tool
+            .execute(json!({
+                "action": "set",
+                "domain_filter": ["example.com"],
+                "language_filter": ["zh"],
+                "jina_site_filters": ["example.com"]
+            }))
+            .await
+            .unwrap();
+        assert!(first.success, "{:?}", first.error);
+
+        let second = tool
+            .execute(json!({
+                "action": "set",
+                "add_domain_filter": ["docs.rs", "example.com"],
+                "remove_domain_filter": ["example.com"],
+                "add_language_filter": ["en", "zh"],
+                "remove_language_filter": ["zh"],
+                "add_jina_site_filters": ["docs.rs", "example.com"],
+                "remove_jina_site_filters": ["example.com"]
+            }))
+            .await
+            .unwrap();
+        assert!(second.success, "{:?}", second.error);
+
+        let output: Value = serde_json::from_str(&second.output).unwrap();
+        let web_search = &output["web_search"];
+        assert_eq!(web_search["domain_filter"], json!(["docs.rs"]));
+        assert_eq!(web_search["language_filter"], json!(["en"]));
+        assert_eq!(web_search["jina_site_filters"], json!(["docs.rs"]));
     }
 }

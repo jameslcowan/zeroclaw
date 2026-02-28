@@ -566,9 +566,9 @@ Notes:
 |---|---|---|
 | `enabled` | `false` | Enable browser tools (`browser_open` and `browser`) |
 | `allowed_domains` | `[]` | Allowed domains for `browser_open` and `browser` (exact/subdomain match, or `"*"` for all public domains) |
-| `browser_open` | `default` | Browser used by `browser_open`: `disable`, `brave`, `chrome`, `firefox`, `edge` (`msedge` alias), `default` |
+| `browser_open` | `default` | Browser used by `browser_open`: `disable`, `brave`, `chrome`, `firefox`, `edge` (`msedge` alias), `default` (`system`/`os` aliases) |
 | `session_name` | unset | Browser session name (for agent-browser automation) |
-| `backend` | `agent_browser` | Browser automation backend: `"agent_browser"`, `"rust_native"`, `"computer_use"`, or `"auto"` |
+| `backend` | `agent_browser` | Browser automation backend: `"agent_browser"` (`default`/`primary`/`main` aliases), `"rust_native"`, `"computer_use"`, or `"auto"` |
 | `auto_backend_priority` | `[]` | Priority order for `backend = "auto"` (for example `["agent_browser","rust_native","computer_use"]`) |
 | `agent_browser_command` | `agent-browser` | Executable/path for agent-browser CLI |
 | `agent_browser_extra_args` | `[]` | Extra args prepended to each agent-browser command |
@@ -597,6 +597,7 @@ Notes:
 - `allow_remote_endpoint = false` (default) rejects any non-loopback endpoint to prevent accidental public exposure.
 - Use `window_allowlist` to restrict which OS windows the sidecar can interact with.
 - Agents can modify these settings at runtime via `browser_config` (`action=get|set|list_backends`).
+- Runtime updates support full replacement and incremental add/remove operations for `allowed_domains`, `auto_backend_priority`, `agent_browser_extra_args`, and `computer_use.window_allowlist`.
 - Browser automation here uses `agent-browser`, rust-native WebDriver, or `computer_use` sidecar; it does not depend on Playwright/Selenium backends.
 
 Runtime workflow (`browser_config`):
@@ -615,6 +616,18 @@ Runtime workflow (`browser_config`):
 
 ```json
 {"action":"set","add_allowed_domains":["news.ycombinator.com"],"remove_allowed_domains":["github.com"]}
+```
+
+```json
+{"action":"set","backend":"primary","browser_open":"system"}
+```
+
+```json
+{"action":"set","add_agent_browser_extra_args":["--viewport=1280,960"],"remove_agent_browser_extra_args":["--headless"]}
+```
+
+```json
+{"action":"set","add_computer_use_window_allowlist":["Chrome"],"remove_computer_use_window_allowlist":["Terminal"]}
 ```
 
 ```json
@@ -691,6 +704,7 @@ Notes:
 - If DuckDuckGo returns `403`/`429` in your network, switch provider to `brave`, `perplexity`, `exa`, or configure `fallback_providers`.
 - `web_search` finds candidate URLs; pair it with `web_fetch` for page content extraction.
 - Agents can modify these settings at runtime via the `web_search_config` tool (`action=get|set|list_providers`).
+- Runtime updates support both full replacement and incremental add/remove mutations for `fallback_providers`, `domain_filter`, `language_filter`, and `jina_site_filters`.
 - In supervised mode, `web_search_config` mutations still require normal tool approval unless explicitly auto-approved.
 - Invalid provider names, `exa_search_type`, and out-of-range retry/result/timeout values are rejected during config validation.
 
@@ -731,7 +745,13 @@ Runtime workflow (`web_search_config`):
 {"action":"set","add_fallback_providers":["exa","jina"],"remove_fallback_providers":["duckduckgo"]}
 ```
 
-4. Tune provider-specific options:
+4. Incrementally maintain filters without replacing the full list:
+
+```json
+{"action":"set","add_domain_filter":["docs.rs"],"remove_domain_filter":["example.com"],"add_language_filter":["en"],"remove_language_filter":["zh"],"add_jina_site_filters":["docs.rs"]}
+```
+
+5. Tune provider-specific options:
 
 ```json
 {"action":"set","exa_search_type":"neural","exa_include_text":true}
@@ -741,13 +761,13 @@ Runtime workflow (`web_search_config`):
 {"action":"set","jina_site_filters":["docs.rs","github.com"]}
 ```
 
-5. Tune transport and identity headers:
+6. Tune transport and identity headers:
 
 ```json
 {"action":"set","api_url":"https://api.perplexity.ai","user_agent":"ZeroClaw/1.0"}
 ```
 
-6. Add geo/language/recency filters for region-aware queries:
+7. Add geo/language/recency filters for region-aware queries:
 
 ```json
 {"action":"set","country":"US","language_filter":["en"],"recency_filter":"week"}

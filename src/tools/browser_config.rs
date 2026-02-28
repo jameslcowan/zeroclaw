@@ -134,14 +134,16 @@ impl BrowserConfigTool {
             "chrome" => Some("chrome"),
             "firefox" => Some("firefox"),
             "edge" | "msedge" => Some("edge"),
-            "default" => Some("default"),
+            "default" | "system" | "os" => Some("default"),
             _ => None,
         }
     }
 
     fn normalize_backend(raw: &str) -> Option<&'static str> {
         match raw.trim().to_ascii_lowercase().replace('-', "_").as_str() {
-            "agent_browser" | "agentbrowser" => Some("agent_browser"),
+            "agent_browser" | "agentbrowser" | "default" | "primary" | "main" => {
+                Some("agent_browser")
+            }
             "rust_native" | "native" => Some("rust_native"),
             "computer_use" | "computeruse" => Some("computer_use"),
             "auto" => Some("auto"),
@@ -215,6 +217,21 @@ impl BrowserConfigTool {
         out
     }
 
+    fn merge_freeform_list(base: &mut Vec<String>, additions: Vec<String>) {
+        for value in Self::normalize_freeform_list(additions) {
+            if !base.contains(&value) {
+                base.push(value);
+            }
+        }
+    }
+
+    fn remove_freeform_list(base: &mut Vec<String>, removals: Vec<String>) {
+        let removal_set: HashSet<String> = Self::normalize_freeform_list(removals)
+            .into_iter()
+            .collect();
+        base.retain(|entry| !removal_set.contains(entry));
+    }
+
     fn snapshot(cfg: &BrowserConfig) -> Value {
         json!({
             "enabled": cfg.enabled,
@@ -261,6 +278,20 @@ impl BrowserConfigTool {
                 "supported_backends": ["agent_browser", "rust_native", "computer_use", "auto"],
                 "auto_backend_priority_values": ["agent_browser", "rust_native", "computer_use"],
                 "browser_open_values": ["disable", "brave", "chrome", "firefox", "edge", "default"],
+                "aliases": {
+                    "backend": {
+                        "default": "agent_browser",
+                        "primary": "agent_browser",
+                        "main": "agent_browser",
+                        "native": "rust_native",
+                        "computeruse": "computer_use"
+                    },
+                    "browser_open": {
+                        "msedge": "edge",
+                        "system": "default",
+                        "os": "default"
+                    }
+                },
                 "examples": {
                     "enable_auto_backend": {
                         "action": "set",
@@ -279,6 +310,16 @@ impl BrowserConfigTool {
                         "backend": "computer_use",
                         "computer_use_endpoint": "http://127.0.0.1:8787/v1/actions",
                         "computer_use_allow_remote_endpoint": false
+                    },
+                    "incremental_agent_browser_args": {
+                        "action": "set",
+                        "add_agent_browser_extra_args": ["--viewport=1280,960"],
+                        "remove_agent_browser_extra_args": ["--headless"]
+                    },
+                    "reset_defaults": {
+                        "action": "set",
+                        "backend": null,
+                        "browser_open": null
                     }
                 }
             }))?,
@@ -372,6 +413,20 @@ impl BrowserConfigTool {
             );
         }
 
+        if let Some(raw) = args.get("add_agent_browser_extra_args") {
+            Self::merge_freeform_list(
+                &mut browser.agent_browser_extra_args,
+                Self::parse_string_list(raw, "add_agent_browser_extra_args")?,
+            );
+        }
+
+        if let Some(raw) = args.get("remove_agent_browser_extra_args") {
+            Self::remove_freeform_list(
+                &mut browser.agent_browser_extra_args,
+                Self::parse_string_list(raw, "remove_agent_browser_extra_args")?,
+            );
+        }
+
         if let Some(raw) = args.get("agent_browser_timeout_ms") {
             let value = raw
                 .as_u64()
@@ -407,6 +462,20 @@ impl BrowserConfigTool {
         if let Some(raw) = args.get("computer_use_window_allowlist") {
             browser.computer_use.window_allowlist = Self::normalize_freeform_list(
                 Self::parse_string_list(raw, "computer_use_window_allowlist")?,
+            );
+        }
+
+        if let Some(raw) = args.get("add_computer_use_window_allowlist") {
+            Self::merge_freeform_list(
+                &mut browser.computer_use.window_allowlist,
+                Self::parse_string_list(raw, "add_computer_use_window_allowlist")?,
+            );
+        }
+
+        if let Some(raw) = args.get("remove_computer_use_window_allowlist") {
+            Self::remove_freeform_list(
+                &mut browser.computer_use.window_allowlist,
+                Self::parse_string_list(raw, "remove_computer_use_window_allowlist")?,
             );
         }
 
@@ -537,6 +606,18 @@ impl Tool for BrowserConfigTool {
                         {"type": "array", "items": {"type": "string"}}
                     ]
                 },
+                "add_agent_browser_extra_args": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
+                "remove_agent_browser_extra_args": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
                 "agent_browser_timeout_ms": {"type": "integer", "minimum": 1},
                 "native_headless": {"type": "boolean"},
                 "native_webdriver_url": {"type": ["string", "null"]},
@@ -546,6 +627,18 @@ impl Tool for BrowserConfigTool {
                 "computer_use_timeout_ms": {"type": "integer", "minimum": 1},
                 "computer_use_allow_remote_endpoint": {"type": "boolean"},
                 "computer_use_window_allowlist": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
+                "add_computer_use_window_allowlist": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}}
+                    ]
+                },
+                "remove_computer_use_window_allowlist": {
                     "anyOf": [
                         {"type": "string"},
                         {"type": "array", "items": {"type": "string"}}
@@ -714,6 +807,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_supports_default_aliases_for_backend_and_browser_open() {
+        let tmp = TempDir::new().unwrap();
+        let tool = BrowserConfigTool::new(test_config(&tmp).await, test_security());
+
+        let result = tool
+            .execute(json!({
+                "action": "set",
+                "backend": "main",
+                "browser_open": "system"
+            }))
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.error);
+
+        let output: Value = serde_json::from_str(&result.output).unwrap();
+        let browser = &output["browser"];
+        assert_eq!(browser["backend"], json!("agent_browser"));
+        assert_eq!(browser["browser_open"], json!("default"));
+    }
+
+    #[tokio::test]
     async fn set_supports_add_and_remove_allowed_domains() {
         let tmp = TempDir::new().unwrap();
         let tool = BrowserConfigTool::new(test_config(&tmp).await, test_security());
@@ -741,6 +855,44 @@ mod tests {
         assert_eq!(
             output["browser"]["allowed_domains"],
             json!(["api.example.com", "docs.rs"])
+        );
+    }
+
+    #[tokio::test]
+    async fn set_supports_incremental_agent_args_and_window_allowlist_updates() {
+        let tmp = TempDir::new().unwrap();
+        let tool = BrowserConfigTool::new(test_config(&tmp).await, test_security());
+
+        let first = tool
+            .execute(json!({
+                "action": "set",
+                "agent_browser_extra_args": ["--headless"],
+                "computer_use_window_allowlist": ["Chrome"]
+            }))
+            .await
+            .unwrap();
+        assert!(first.success, "{:?}", first.error);
+
+        let second = tool
+            .execute(json!({
+                "action": "set",
+                "add_agent_browser_extra_args": ["--viewport=1280,960", "--headless"],
+                "remove_agent_browser_extra_args": ["--headless"],
+                "add_computer_use_window_allowlist": ["Terminal", "Chrome"],
+                "remove_computer_use_window_allowlist": ["Chrome"]
+            }))
+            .await
+            .unwrap();
+        assert!(second.success, "{:?}", second.error);
+
+        let output: Value = serde_json::from_str(&second.output).unwrap();
+        assert_eq!(
+            output["browser"]["agent_browser_extra_args"],
+            json!(["--viewport=1280,960"])
+        );
+        assert_eq!(
+            output["browser"]["computer_use"]["window_allowlist"],
+            json!(["Terminal"])
         );
     }
 }
