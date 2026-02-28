@@ -790,8 +790,8 @@ fn load_or_init_skill_download_policy(skills_path: &Path) -> Result<SkillDownloa
     let mut policy: SkillDownloadPolicy = toml::from_str(&raw).unwrap_or_default();
     let mut policy_changed = false;
     for (alias, source) in default_preloaded_skill_aliases() {
-        if !policy.aliases.contains_key(&alias) {
-            policy.aliases.insert(alias, source);
+        if let std::collections::btree_map::Entry::Vacant(entry) = policy.aliases.entry(alias) {
+            entry.insert(source);
             policy_changed = true;
         }
     }
@@ -1011,13 +1011,7 @@ fn is_git_scp_source(source: &str) -> bool {
 fn normalize_skills_sh_dir_name(s: &str) -> String {
     s.to_ascii_lowercase()
         .chars()
-        .filter_map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                Some(c)
-            } else {
-                None
-            }
-        })
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
         .collect()
 }
 
