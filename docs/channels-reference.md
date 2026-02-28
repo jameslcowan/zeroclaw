@@ -56,6 +56,8 @@ Telegram/Discord sender-scoped model routing:
 Supervised tool approvals (all non-CLI channels):
 - `/approve-request <tool-name>` — create a pending approval request
 - `/approve-confirm <request-id>` — confirm pending request (same sender + same chat/channel only)
+- `/approve-allow <request-id>` — approve a waiting supervised tool execution (same sender + same chat/channel only)
+- `/approve-deny <request-id>` — deny a waiting supervised tool execution (same sender + same chat/channel only)
 - `/approve-pending` — list pending requests for your current sender+chat/channel scope
 - `/approve <tool-name>` — direct one-step approve + persist (`autonomy.auto_approve`, compatibility path)
 - `/unapprove <tool-name>` — revoke and remove persisted approval
@@ -71,6 +73,7 @@ Notes:
   - `direct` mode (default): `授权工具 shell` grants immediately.
   - `request_confirm` mode: `授权工具 shell` creates pending request, then confirm with request ID.
   - `disabled` mode: approval-management must use slash commands.
+- Use `/approve-confirm` when you want a persistent tool grant, and `/approve-allow` / `/approve-deny` to resolve a waiting single execution without persisting future grants.
 - You can override natural-language approval mode per channel via `[autonomy].non_cli_natural_language_approval_mode_by_channel`.
 - Approval commands are intercepted before LLM execution, so the model cannot self-escalate permissions through tool calls.
 - You can restrict who can use approval-management commands via `[autonomy].non_cli_approval_approvers`.

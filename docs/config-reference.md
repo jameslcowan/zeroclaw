@@ -788,6 +788,7 @@ Notes:
   - One-step flow: `/approve <tool>`.
   - Two-step flow: `/approve-request <tool>` then `/approve-confirm <request-id>` (same sender + same chat/channel).
   Both paths write to `autonomy.auto_approve` and remove the tool from `autonomy.always_ask`.
+- For pending supervised execution requests, use `/approve-allow <request-id>` or `/approve-deny <request-id>` (same sender + same chat/channel). These commands resolve the waiting request without persisting a long-lived tool grant.
 - `non_cli_natural_language_approval_mode` controls how strict natural-language approval intents are:
   - `direct` (default): natural-language approval grants immediately (private-chat friendly).
   - `request_confirm`: natural-language approval creates a pending request that needs explicit confirm.

@@ -1833,6 +1833,7 @@ fn build_models_help_response(current: &ChannelRouteSelection, workspace_dir: &P
     response.push_str("Request supervised tool approval with `/approve-request <tool-name>`.\n");
     response.push_str("Request one-time all-tools approval with `/approve-all-once`.\n");
     response.push_str("Confirm approval with `/approve-confirm <request-id>`.\n");
+    response.push_str("Allow waiting execution with `/approve-allow <request-id>`.\n");
     response.push_str("Deny approval with `/approve-deny <request-id>`.\n");
     response.push_str("List pending requests with `/approve-pending`.\n");
     response.push_str("Approve supervised tools with `/approve <tool-name>`.\n");
@@ -1877,6 +1878,7 @@ fn build_providers_help_response(current: &ChannelRouteSelection) -> String {
     response.push_str("Request supervised tool approval with `/approve-request <tool-name>`.\n");
     response.push_str("Request one-time all-tools approval with `/approve-all-once`.\n");
     response.push_str("Confirm approval with `/approve-confirm <request-id>`.\n");
+    response.push_str("Allow waiting execution with `/approve-allow <request-id>`.\n");
     response.push_str("Deny approval with `/approve-deny <request-id>`.\n");
     response.push_str("List pending requests with `/approve-pending`.\n");
     response.push_str("Approve supervised tools with `/approve <tool-name>`.\n");
@@ -8020,6 +8022,363 @@ BTC is currently around $65,000 based on latest tool output."#
         );
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].request_id, request_id);
+    }
+
+    #[tokio::test]
+    async fn process_channel_message_approve_allow_records_yes_resolution() {
+        let channel_impl = Arc::new(TelegramRecordingChannel::default());
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+
+        let mut channels_by_name = HashMap::new();
+        channels_by_name.insert(channel.name().to_string(), channel);
+
+        let provider_impl = Arc::new(ModelCaptureProvider::default());
+        let provider: Arc<dyn Provider> = provider_impl.clone();
+        let mut provider_cache_seed: HashMap<String, Arc<dyn Provider>> = HashMap::new();
+        provider_cache_seed.insert("test-provider".to_string(), Arc::clone(&provider));
+
+        let autonomy_cfg = crate::config::AutonomyConfig {
+            non_cli_natural_language_approval_mode:
+                crate::config::NonCliNaturalLanguageApprovalMode::RequestConfirm,
+            ..crate::config::AutonomyConfig::default()
+        };
+
+        let runtime_ctx = Arc::new(ChannelRuntimeContext {
+            channels_by_name: Arc::new(channels_by_name),
+            provider: Arc::clone(&provider),
+            default_provider: Arc::new("test-provider".to_string()),
+            memory: Arc::new(NoopMemory),
+            tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+            observer: Arc::new(NoopObserver),
+            system_prompt: Arc::new("test-system-prompt".to_string()),
+            model: Arc::new("default-model".to_string()),
+            temperature: 0.0,
+            auto_save_memory: false,
+            max_tool_iterations: 5,
+            min_relevance_score: 0.0,
+            conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
+            route_overrides: Arc::new(Mutex::new(HashMap::new())),
+            api_key: None,
+            api_url: None,
+            reliability: Arc::new(crate::config::ReliabilityConfig::default()),
+            provider_runtime_options: providers::ProviderRuntimeOptions::default(),
+            workspace_dir: Arc::new(std::env::temp_dir()),
+            message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+            interrupt_on_new_message: false,
+            multimodal: crate::config::MultimodalConfig::default(),
+            hooks: None,
+            non_cli_excluded_tools: Arc::new(Mutex::new(Vec::new())),
+            query_classification: crate::config::QueryClassificationConfig::default(),
+            model_routes: Vec::new(),
+            approval_manager: Arc::new(ApprovalManager::from_config(&autonomy_cfg)),
+        });
+
+        process_channel_message(
+            runtime_ctx.clone(),
+            traits::ChannelMessage {
+                id: "msg-approve-allow-1".to_string(),
+                sender: "alice".to_string(),
+                reply_target: "chat-1".to_string(),
+                content: "授权工具 mock_price".to_string(),
+                channel: "telegram".to_string(),
+                timestamp: 1,
+                thread_ts: None,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        let request_id = {
+            let sent = channel_impl.sent_messages.lock().await;
+            assert_eq!(sent.len(), 1);
+            let request_line = sent[0]
+                .lines()
+                .find(|line| line.starts_with("Request ID: `"))
+                .expect("request line");
+            request_line
+                .trim_start_matches("Request ID: `")
+                .trim_end_matches('`')
+                .to_string()
+        };
+
+        process_channel_message(
+            runtime_ctx.clone(),
+            traits::ChannelMessage {
+                id: "msg-approve-allow-2".to_string(),
+                sender: "alice".to_string(),
+                reply_target: "chat-1".to_string(),
+                content: format!("/approve-allow {request_id}"),
+                channel: "telegram".to_string(),
+                timestamp: 2,
+                thread_ts: None,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        let sent = channel_impl.sent_messages.lock().await;
+        assert_eq!(sent.len(), 2);
+        assert!(sent[1].contains("Approved pending request"));
+        assert!(sent[1].contains("can now continue"));
+        assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 0);
+
+        let pending = runtime_ctx.approval_manager.list_non_cli_pending_requests(
+            Some("alice"),
+            Some("telegram"),
+            Some("chat-1"),
+        );
+        assert!(pending.is_empty());
+        assert_eq!(
+            runtime_ctx
+                .approval_manager
+                .take_non_cli_pending_resolution(&request_id),
+            Some(ApprovalResponse::Yes)
+        );
+        assert_eq!(
+            runtime_ctx
+                .approval_manager
+                .take_non_cli_pending_resolution(&request_id),
+            None
+        );
+        assert!(!runtime_ctx
+            .approval_manager
+            .is_non_cli_session_granted("mock_price"));
+    }
+
+    #[tokio::test]
+    async fn process_channel_message_approve_deny_records_no_resolution() {
+        let channel_impl = Arc::new(TelegramRecordingChannel::default());
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+
+        let mut channels_by_name = HashMap::new();
+        channels_by_name.insert(channel.name().to_string(), channel);
+
+        let provider_impl = Arc::new(ModelCaptureProvider::default());
+        let provider: Arc<dyn Provider> = provider_impl.clone();
+        let mut provider_cache_seed: HashMap<String, Arc<dyn Provider>> = HashMap::new();
+        provider_cache_seed.insert("test-provider".to_string(), Arc::clone(&provider));
+
+        let autonomy_cfg = crate::config::AutonomyConfig {
+            non_cli_natural_language_approval_mode:
+                crate::config::NonCliNaturalLanguageApprovalMode::RequestConfirm,
+            ..crate::config::AutonomyConfig::default()
+        };
+
+        let runtime_ctx = Arc::new(ChannelRuntimeContext {
+            channels_by_name: Arc::new(channels_by_name),
+            provider: Arc::clone(&provider),
+            default_provider: Arc::new("test-provider".to_string()),
+            memory: Arc::new(NoopMemory),
+            tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+            observer: Arc::new(NoopObserver),
+            system_prompt: Arc::new("test-system-prompt".to_string()),
+            model: Arc::new("default-model".to_string()),
+            temperature: 0.0,
+            auto_save_memory: false,
+            max_tool_iterations: 5,
+            min_relevance_score: 0.0,
+            conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
+            route_overrides: Arc::new(Mutex::new(HashMap::new())),
+            api_key: None,
+            api_url: None,
+            reliability: Arc::new(crate::config::ReliabilityConfig::default()),
+            provider_runtime_options: providers::ProviderRuntimeOptions::default(),
+            workspace_dir: Arc::new(std::env::temp_dir()),
+            message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+            interrupt_on_new_message: false,
+            multimodal: crate::config::MultimodalConfig::default(),
+            hooks: None,
+            non_cli_excluded_tools: Arc::new(Mutex::new(Vec::new())),
+            query_classification: crate::config::QueryClassificationConfig::default(),
+            model_routes: Vec::new(),
+            approval_manager: Arc::new(ApprovalManager::from_config(&autonomy_cfg)),
+        });
+
+        process_channel_message(
+            runtime_ctx.clone(),
+            traits::ChannelMessage {
+                id: "msg-approve-deny-1".to_string(),
+                sender: "alice".to_string(),
+                reply_target: "chat-1".to_string(),
+                content: "授权工具 mock_price".to_string(),
+                channel: "telegram".to_string(),
+                timestamp: 1,
+                thread_ts: None,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        let request_id = {
+            let sent = channel_impl.sent_messages.lock().await;
+            assert_eq!(sent.len(), 1);
+            let request_line = sent[0]
+                .lines()
+                .find(|line| line.starts_with("Request ID: `"))
+                .expect("request line");
+            request_line
+                .trim_start_matches("Request ID: `")
+                .trim_end_matches('`')
+                .to_string()
+        };
+
+        process_channel_message(
+            runtime_ctx.clone(),
+            traits::ChannelMessage {
+                id: "msg-approve-deny-2".to_string(),
+                sender: "alice".to_string(),
+                reply_target: "chat-1".to_string(),
+                content: format!("/approve-deny {request_id}"),
+                channel: "telegram".to_string(),
+                timestamp: 2,
+                thread_ts: None,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        let sent = channel_impl.sent_messages.lock().await;
+        assert_eq!(sent.len(), 2);
+        assert!(sent[1].contains("Denied pending request"));
+        assert!(sent[1].contains("will be rejected"));
+        assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 0);
+
+        let pending = runtime_ctx.approval_manager.list_non_cli_pending_requests(
+            Some("alice"),
+            Some("telegram"),
+            Some("chat-1"),
+        );
+        assert!(pending.is_empty());
+        assert_eq!(
+            runtime_ctx
+                .approval_manager
+                .take_non_cli_pending_resolution(&request_id),
+            Some(ApprovalResponse::No)
+        );
+        assert_eq!(
+            runtime_ctx
+                .approval_manager
+                .take_non_cli_pending_resolution(&request_id),
+            None
+        );
+        assert!(!runtime_ctx
+            .approval_manager
+            .is_non_cli_session_granted("mock_price"));
+    }
+
+    #[tokio::test]
+    async fn process_channel_message_approve_deny_rejects_sender_mismatch() {
+        let channel_impl = Arc::new(TelegramRecordingChannel::default());
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+
+        let mut channels_by_name = HashMap::new();
+        channels_by_name.insert(channel.name().to_string(), channel);
+
+        let provider_impl = Arc::new(ModelCaptureProvider::default());
+        let provider: Arc<dyn Provider> = provider_impl.clone();
+        let mut provider_cache_seed: HashMap<String, Arc<dyn Provider>> = HashMap::new();
+        provider_cache_seed.insert("test-provider".to_string(), Arc::clone(&provider));
+
+        let autonomy_cfg = crate::config::AutonomyConfig {
+            non_cli_natural_language_approval_mode:
+                crate::config::NonCliNaturalLanguageApprovalMode::RequestConfirm,
+            ..crate::config::AutonomyConfig::default()
+        };
+
+        let runtime_ctx = Arc::new(ChannelRuntimeContext {
+            channels_by_name: Arc::new(channels_by_name),
+            provider: Arc::clone(&provider),
+            default_provider: Arc::new("test-provider".to_string()),
+            memory: Arc::new(NoopMemory),
+            tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+            observer: Arc::new(NoopObserver),
+            system_prompt: Arc::new("test-system-prompt".to_string()),
+            model: Arc::new("default-model".to_string()),
+            temperature: 0.0,
+            auto_save_memory: false,
+            max_tool_iterations: 5,
+            min_relevance_score: 0.0,
+            conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
+            route_overrides: Arc::new(Mutex::new(HashMap::new())),
+            api_key: None,
+            api_url: None,
+            reliability: Arc::new(crate::config::ReliabilityConfig::default()),
+            provider_runtime_options: providers::ProviderRuntimeOptions::default(),
+            workspace_dir: Arc::new(std::env::temp_dir()),
+            message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+            interrupt_on_new_message: false,
+            multimodal: crate::config::MultimodalConfig::default(),
+            hooks: None,
+            non_cli_excluded_tools: Arc::new(Mutex::new(Vec::new())),
+            query_classification: crate::config::QueryClassificationConfig::default(),
+            model_routes: Vec::new(),
+            approval_manager: Arc::new(ApprovalManager::from_config(&autonomy_cfg)),
+        });
+
+        process_channel_message(
+            runtime_ctx.clone(),
+            traits::ChannelMessage {
+                id: "msg-approve-deny-mismatch-1".to_string(),
+                sender: "alice".to_string(),
+                reply_target: "chat-1".to_string(),
+                content: "授权工具 mock_price".to_string(),
+                channel: "telegram".to_string(),
+                timestamp: 1,
+                thread_ts: None,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        let request_id = {
+            let sent = channel_impl.sent_messages.lock().await;
+            assert_eq!(sent.len(), 1);
+            let request_line = sent[0]
+                .lines()
+                .find(|line| line.starts_with("Request ID: `"))
+                .expect("request line");
+            request_line
+                .trim_start_matches("Request ID: `")
+                .trim_end_matches('`')
+                .to_string()
+        };
+
+        process_channel_message(
+            runtime_ctx.clone(),
+            traits::ChannelMessage {
+                id: "msg-approve-deny-mismatch-2".to_string(),
+                sender: "bob".to_string(),
+                reply_target: "chat-1".to_string(),
+                content: format!("/approve-deny {request_id}"),
+                channel: "telegram".to_string(),
+                timestamp: 2,
+                thread_ts: None,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        let sent = channel_impl.sent_messages.lock().await;
+        assert_eq!(sent.len(), 2);
+        assert!(sent[1].contains("can only be resolved by the same sender"));
+        assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 0);
+
+        let pending = runtime_ctx.approval_manager.list_non_cli_pending_requests(
+            Some("alice"),
+            Some("telegram"),
+            Some("chat-1"),
+        );
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].request_id, request_id);
+        assert_eq!(
+            runtime_ctx
+                .approval_manager
+                .take_non_cli_pending_resolution(&request_id),
+            None
+        );
     }
 
     #[tokio::test]

@@ -154,6 +154,8 @@ Runtime in-chat commands while channel server is running:
 - Supervised tool approvals (all non-CLI channels):
   - `/approve-request <tool-name>` (create pending approval request)
   - `/approve-confirm <request-id>` (confirm pending request; same sender + same chat/channel only)
+  - `/approve-allow <request-id>` (approve a waiting supervised tool execution; same sender + same chat/channel only)
+  - `/approve-deny <request-id>` (deny a waiting supervised tool execution; same sender + same chat/channel only)
   - `/approve-pending` (list pending requests in current sender+chat/channel scope)
   - `/approve <tool-name>` (direct one-step grant + persist to `autonomy.auto_approve`, compatibility path)
   - `/unapprove <tool-name>` (revoke + remove from `autonomy.auto_approve`)
@@ -168,7 +170,9 @@ Approval safety behavior:
 
 - Runtime approval commands are parsed and executed **before** LLM inference in the channel loop.
 - Pending requests are sender+chat/channel scoped and expire automatically.
-- Confirmation requires the same sender in the same chat/channel that created the request.
+- Confirmation/allow/deny requires the same sender in the same chat/channel that created the request.
+- `/approve-confirm` persists tool approval (`autonomy.auto_approve`) for future turns.
+- `/approve-allow` and `/approve-deny` resolve a waiting execution request without persisting a long-lived tool allowlist grant.
 - Once approved and persisted, the tool remains approved across restarts until revoked.
 - Optional policy gate: `[autonomy].non_cli_approval_approvers` can restrict who may execute approval-management commands.
 
