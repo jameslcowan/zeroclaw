@@ -56,6 +56,7 @@ pub mod memory_observe;
 pub mod memory_recall;
 pub mod memory_store;
 pub mod model_routing_config;
+pub mod openclaw_migration;
 pub mod pdf_read;
 pub mod pptx_read;
 pub mod process;
@@ -116,6 +117,7 @@ pub use memory_observe::MemoryObserveTool;
 pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
 pub use model_routing_config::ModelRoutingConfigTool;
+pub use openclaw_migration::OpenClawMigrationTool;
 pub use pdf_read::PdfReadTool;
 pub use pptx_read::PptxReadTool;
 pub use process::ProcessTool;
@@ -304,6 +306,7 @@ pub fn all_tools_with_runtime(
         Arc::new(CheckProviderQuotaTool::new(config.clone())),
         Arc::new(SwitchProviderTool::new(config.clone())),
         Arc::new(EstimateQuotaCostTool),
+        Arc::new(OpenClawMigrationTool::new(config.clone(), security.clone())),
         Arc::new(PushoverTool::new(
             security.clone(),
             workspace_dir.to_path_buf(),
@@ -684,6 +687,7 @@ mod tests {
         assert!(names.contains(&"proxy_config"));
         assert!(names.contains(&"web_access_config"));
         assert!(names.contains(&"web_search_config"));
+        assert!(names.contains(&"openclaw_migration"));
     }
 
     #[test]
@@ -728,6 +732,7 @@ mod tests {
         assert!(names.contains(&"proxy_config"));
         assert!(names.contains(&"web_access_config"));
         assert!(names.contains(&"web_search_config"));
+        assert!(names.contains(&"openclaw_migration"));
     }
 
     #[test]
