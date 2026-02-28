@@ -353,6 +353,15 @@ Notes:
 - Precedence for enable flag: `ZEROCLAW_OPEN_SKILLS_ENABLED` → `skills.open_skills_enabled` in `config.toml` → default `false`.
 - `prompt_injection_mode = "compact"` is recommended on low-context local models to reduce startup prompt size while keeping skill files available on demand.
 - Skill loading and `zeroclaw skills install` both apply a static security audit. Skills that contain symlinks, script-like files, high-risk shell payload snippets, or unsafe markdown link traversal are rejected.
+- URL-based installs enforce first-seen domain trust. On first download from an unseen domain, ZeroClaw prompts for trust and persists the decision.
+- Download-source aliases and trust decisions are stored in `<workspace>/skills/.download-policy.toml`:
+  - `aliases`: user-editable source shortcuts.
+  - `trusted_domains`: domain allowlist for future URL installs.
+  - `blocked_domains`: domains explicitly denied.
+- Default aliases are preloaded for:
+  - `find-skills` → `https://skills.sh/vercel-labs/skills/find-skills`
+  - `skill-creator` → `https://skills.sh/anthropics/skills/skill-creator`
+- For transparency, built-in default skill sources are committed under repo `/skills/` and copied into each workspace `skills/` directory during initialization.
 
 ## `[composio]`
 

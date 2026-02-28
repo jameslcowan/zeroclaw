@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use directories::UserDirs;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
@@ -11,6 +12,91 @@ mod audit;
 const OPEN_SKILLS_REPO_URL: &str = "https://github.com/besoeasy/open-skills";
 const OPEN_SKILLS_SYNC_MARKER: &str = ".zeroclaw-open-skills-sync";
 const OPEN_SKILLS_SYNC_INTERVAL_SECS: u64 = 60 * 60 * 24 * 7;
+const SKILL_DOWNLOAD_POLICY_FILE: &str = ".download-policy.toml";
+const SKILLS_SH_HOST: &str = "skills.sh";
+
+const DEFAULT_PRELOADED_SKILL_SOURCES: [(&str, &str); 2] = [
+    (
+        "find-skills",
+        "https://skills.sh/vercel-labs/skills/find-skills",
+    ),
+    (
+        "skill-creator",
+        "https://skills.sh/anthropics/skills/skill-creator",
+    ),
+];
+
+struct BuiltinPreloadedSkill {
+    dir_name: &'static str,
+    source_url: &'static str,
+    markdown: &'static str,
+}
+
+const BUILTIN_PRELOADED_SKILLS: [BuiltinPreloadedSkill; 2] = [
+    BuiltinPreloadedSkill {
+        dir_name: "find-skills",
+        source_url: "https://skills.sh/vercel-labs/skills/find-skills",
+        markdown: include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/skills/find-skills/SKILL.md"
+        )),
+    },
+    BuiltinPreloadedSkill {
+        dir_name: "skill-creator",
+        source_url: "https://skills.sh/anthropics/skills/skill-creator",
+        markdown: include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/skills/skill-creator/SKILL.md"
+        )),
+    },
+];
+
+fn default_policy_version() -> u32 {
+    1
+}
+
+fn default_preloaded_skill_aliases() -> BTreeMap<String, String> {
+    DEFAULT_PRELOADED_SKILL_SOURCES
+        .iter()
+        .map(|(alias, source)| ((*alias).to_string(), (*source).to_string()))
+        .collect()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SkillDownloadPolicy {
+    #[serde(default = "default_policy_version")]
+    version: u32,
+    #[serde(default = "default_preloaded_skill_aliases")]
+    aliases: BTreeMap<String, String>,
+    #[serde(default)]
+    trusted_domains: Vec<String>,
+    #[serde(default)]
+    blocked_domains: Vec<String>,
+}
+
+impl Default for SkillDownloadPolicy {
+    fn default() -> Self {
+        Self {
+            version: default_policy_version(),
+            aliases: default_preloaded_skill_aliases(),
+            trusted_domains: Vec::new(),
+            blocked_domains: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SkillsShSource {
+    owner: String,
+    repo: String,
+    skill: String,
+}
+
+impl SkillsShSource {
+    fn github_repo_url(&self) -> String {
+        format!("https://github.com/{}/{}.git", self.owner, self.repo)
+    }
+}
 
 /// A skill is a user-defined or community-built capability.
 /// Skills live in `~/.zeroclaw/workspace/skills/<name>/SKILL.md`
@@ -593,6 +679,249 @@ pub fn skills_dir(workspace_dir: &Path) -> PathBuf {
     workspace_dir.join("skills")
 }
 
+fn download_policy_path(skills_path: &Path) -> PathBuf {
+    skills_path.join(SKILL_DOWNLOAD_POLICY_FILE)
+}
+
+fn normalize_domain_entry(raw: &str) -> String {
+    let mut s = raw.trim().to_ascii_lowercase();
+    if s.is_empty() {
+        return s;
+    }
+    if let Some(rest) = s.strip_prefix("https://") {
+        s = rest.to_string();
+    } else if let Some(rest) = s.strip_prefix("http://") {
+        s = rest.to_string();
+    }
+    s = s
+        .split(&['/', '?', '#'][..])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    s = s
+        .trim_start_matches("*.")
+        .trim_start_matches('.')
+        .to_string();
+    if let Some((host, _port)) = s.split_once(':') {
+        return host.to_string();
+    }
+    s
+}
+
+fn normalize_domain_list(entries: &mut Vec<String>) {
+    let mut normalized = entries
+        .iter()
+        .map(|entry| normalize_domain_entry(entry))
+        .filter(|entry| !entry.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    *entries = normalized;
+}
+
+fn host_matches_trusted_domain(host: &str, trusted_domain: &str) -> bool {
+    let host = normalize_domain_entry(host);
+    let trusted = normalize_domain_entry(trusted_domain);
+    if host.is_empty() || trusted.is_empty() {
+        return false;
+    }
+    host == trusted || host.ends_with(&format!(".{trusted}"))
+}
+
+fn host_matches_any_domain(host: &str, entries: &[String]) -> bool {
+    entries
+        .iter()
+        .any(|entry| host_matches_trusted_domain(host, entry))
+}
+
+fn extract_link_host(url: &str) -> Option<String> {
+    let trimmed = url.strip_prefix("zip:").unwrap_or(url);
+    let rest = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .or_else(|| trimmed.strip_prefix("ssh://"))
+        .or_else(|| trimmed.strip_prefix("git://"))?;
+    let host_part = rest.split(&['/', '?', '#'][..]).next().unwrap_or("");
+    let host_part = host_part.rsplit('@').next().unwrap_or(host_part);
+    let host = host_part.split(':').next().unwrap_or("");
+    let normalized = normalize_domain_entry(host);
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn source_urls_for_trust_check(source: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut seen = HashSet::new();
+    let mut push_unique = |url: String| {
+        if seen.insert(url.clone()) {
+            urls.push(url);
+        }
+    };
+
+    if source.starts_with("https://")
+        || source.starts_with("http://")
+        || source.starts_with("ssh://")
+        || source.starts_with("git://")
+    {
+        push_unique(source.to_string());
+    }
+
+    if let Some(skills_source) = parse_skills_sh_source(source) {
+        push_unique(skills_source.github_repo_url());
+    }
+
+    urls
+}
+
+fn load_or_init_skill_download_policy(skills_path: &Path) -> Result<SkillDownloadPolicy> {
+    let path = download_policy_path(skills_path);
+    if !path.exists() {
+        let policy = SkillDownloadPolicy::default();
+        save_skill_download_policy(skills_path, &policy)?;
+        return Ok(policy);
+    }
+
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read skill download policy {}", path.display()))?;
+    let mut policy: SkillDownloadPolicy = toml::from_str(&raw).unwrap_or_default();
+    let mut policy_changed = false;
+    for (alias, source) in default_preloaded_skill_aliases() {
+        if !policy.aliases.contains_key(&alias) {
+            policy.aliases.insert(alias, source);
+            policy_changed = true;
+        }
+    }
+    let before_trusted = policy.trusted_domains.clone();
+    let before_blocked = policy.blocked_domains.clone();
+    normalize_domain_list(&mut policy.trusted_domains);
+    normalize_domain_list(&mut policy.blocked_domains);
+    if before_trusted != policy.trusted_domains || before_blocked != policy.blocked_domains {
+        policy_changed = true;
+    }
+    if policy_changed {
+        save_skill_download_policy(skills_path, &policy)?;
+    }
+    Ok(policy)
+}
+
+fn save_skill_download_policy(skills_path: &Path, policy: &SkillDownloadPolicy) -> Result<()> {
+    let mut to_save = policy.clone();
+    normalize_domain_list(&mut to_save.trusted_domains);
+    normalize_domain_list(&mut to_save.blocked_domains);
+    let serialized =
+        toml::to_string_pretty(&to_save).context("failed to serialize skill download policy")?;
+    let path = download_policy_path(skills_path);
+    std::fs::write(&path, serialized)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
+}
+
+fn resolve_skill_source_alias(source: &str, policy: &SkillDownloadPolicy) -> String {
+    policy
+        .aliases
+        .get(source.trim())
+        .cloned()
+        .unwrap_or_else(|| source.to_string())
+}
+
+fn ensure_source_domain_trust(
+    source: &str,
+    policy: &mut SkillDownloadPolicy,
+    skills_path: &Path,
+) -> Result<()> {
+    let urls = source_urls_for_trust_check(source);
+    if urls.is_empty() {
+        return Ok(());
+    }
+
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let mut policy_changed = false;
+
+    for url in urls {
+        let Some(host) = extract_link_host(&url) else {
+            continue;
+        };
+
+        if host_matches_any_domain(&host, &policy.blocked_domains) {
+            anyhow::bail!(
+                "Domain '{host}' is explicitly blocked for skill downloads. \
+                 Remove it from {}/{} to allow download.",
+                skills_path.display(),
+                SKILL_DOWNLOAD_POLICY_FILE
+            );
+        }
+        if host_matches_any_domain(&host, &policy.trusted_domains) {
+            continue;
+        }
+
+        if !interactive {
+            anyhow::bail!(
+                "Refusing to download skill from untrusted domain '{host}' in non-interactive mode. \
+                 Re-run interactively to approve, or add the domain to trusted_domains in {}/{}.",
+                skills_path.display(),
+                SKILL_DOWNLOAD_POLICY_FILE
+            );
+        }
+
+        let trust = dialoguer::Confirm::new()
+            .with_prompt(format!(
+                "First time downloading a skill from '{host}'. Trust this domain for future downloads?"
+            ))
+            .default(false)
+            .interact()
+            .context("failed to read domain trust confirmation")?;
+
+        if trust {
+            policy.trusted_domains.push(host);
+            policy_changed = true;
+            continue;
+        }
+
+        policy.blocked_domains.push(host);
+        save_skill_download_policy(skills_path, policy)?;
+        anyhow::bail!("Skill download canceled because the source domain was not trusted.");
+    }
+
+    if policy_changed {
+        save_skill_download_policy(skills_path, policy)?;
+    }
+
+    Ok(())
+}
+
+fn ensure_builtin_preloaded_skills(skills_path: &Path) -> Result<()> {
+    for builtin in BUILTIN_PRELOADED_SKILLS {
+        let skill_dir = skills_path.join(builtin.dir_name);
+        if skill_dir.exists() {
+            continue;
+        }
+
+        std::fs::create_dir_all(&skill_dir)
+            .with_context(|| format!("failed to create {}", skill_dir.display()))?;
+        std::fs::write(skill_dir.join("SKILL.md"), builtin.markdown).with_context(|| {
+            format!(
+                "failed to write preloaded skill {}",
+                skill_dir.join("SKILL.md").display()
+            )
+        })?;
+        let meta = serde_json::json!({
+            "slug": builtin.dir_name,
+            "version": "preloaded",
+            "source": builtin.source_url
+        });
+        std::fs::write(
+            skill_dir.join("_meta.json"),
+            serde_json::to_vec_pretty(&meta)?,
+        )
+        .with_context(|| format!("failed to write {}", skill_dir.join("_meta.json").display()))?;
+    }
+    Ok(())
+}
+
 /// Initialize the skills directory with a README
 pub fn init_skills_dir(workspace_dir: &Path) -> Result<()> {
     let dir = skills_dir(workspace_dir);
@@ -628,6 +957,9 @@ pub fn init_skills_dir(workspace_dir: &Path) -> Result<()> {
              ```\n",
         )?;
     }
+
+    ensure_builtin_preloaded_skills(&dir)?;
+    let _ = load_or_init_skill_download_policy(&dir)?;
 
     Ok(())
 }
@@ -674,6 +1006,51 @@ fn is_git_scp_source(source: &str) -> bool {
         && !user.contains('\\')
         && !host.contains('/')
         && !host.contains('\\')
+}
+
+fn normalize_skills_sh_dir_name(s: &str) -> String {
+    s.to_ascii_lowercase()
+        .chars()
+        .filter_map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                Some(c)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn parse_skills_sh_source(source: &str) -> Option<SkillsShSource> {
+    let rest = source.strip_prefix("https://")?;
+    let rest = rest.strip_prefix(SKILLS_SH_HOST)?;
+    let path = rest
+        .trim_start_matches('/')
+        .split(&['?', '#'][..])
+        .next()
+        .unwrap_or("");
+    let mut segments = path.split('/').filter(|part| !part.trim().is_empty());
+    let owner = segments.next()?;
+    let repo = segments.next()?;
+    let skill = segments.next()?;
+    if owner.contains("..")
+        || repo.contains("..")
+        || skill.contains("..")
+        || owner.contains('\\')
+        || repo.contains('\\')
+        || skill.contains('\\')
+    {
+        return None;
+    }
+    Some(SkillsShSource {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+        skill: skill.to_string(),
+    })
+}
+
+fn is_skills_sh_source(source: &str) -> bool {
+    parse_skills_sh_source(source).is_some()
 }
 
 fn snapshot_skill_children(skills_path: &Path) -> Result<HashSet<PathBuf>> {
@@ -827,6 +1204,86 @@ fn install_git_skill_source(source: &str, skills_path: &Path) -> Result<(PathBuf
     }
 }
 
+fn install_skills_sh_source(source: &str, skills_path: &Path) -> Result<(PathBuf, usize)> {
+    let parsed = parse_skills_sh_source(source).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid skills.sh source '{source}': expected https://skills.sh/<owner>/<repo>/<skill>"
+        )
+    })?;
+
+    let repo_url = parsed.github_repo_url();
+    let checkout_root = tempfile::tempdir().context("failed to create temporary checkout dir")?;
+    let checkout_dir = checkout_root.path().join("repo");
+
+    let output = std::process::Command::new("git")
+        .args(["clone", "--depth", "1", &repo_url])
+        .arg(&checkout_dir)
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("failed to clone skills.sh repository {repo_url}: {stderr}");
+    }
+
+    let candidate_paths = [
+        checkout_dir.join("skills").join(&parsed.skill),
+        checkout_dir.join(&parsed.skill),
+    ];
+    let source_dir = candidate_paths
+        .iter()
+        .find(|candidate| {
+            candidate.join("SKILL.md").exists() || candidate.join("SKILL.toml").exists()
+        })
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "could not locate skill '{}' in repository {} (checked skills/{}/ and {}/)",
+                parsed.skill,
+                repo_url,
+                parsed.skill,
+                parsed.skill
+            )
+        })?;
+
+    let normalized_name = normalize_skills_sh_dir_name(&parsed.skill);
+    if normalized_name.is_empty() {
+        anyhow::bail!(
+            "invalid skill name '{}' derived from skills.sh URL: {source}",
+            parsed.skill
+        );
+    }
+    let dest = skills_path.join(&normalized_name);
+    if dest.exists() {
+        anyhow::bail!("Destination skill already exists: {}", dest.display());
+    }
+
+    if let Err(err) = copy_dir_recursive_secure(&source_dir, &dest) {
+        let _ = std::fs::remove_dir_all(&dest);
+        return Err(err);
+    }
+
+    let meta = serde_json::json!({
+        "slug": format!("{}/{}", parsed.owner, parsed.skill),
+        "version": "skills.sh",
+        "ownerId": parsed.owner,
+        "source": source,
+    });
+    if let Err(err) = std::fs::write(
+        dest.join("_meta.json"),
+        serde_json::to_vec_pretty(&meta).context("failed to serialize skills.sh metadata")?,
+    ) {
+        let _ = std::fs::remove_dir_all(&dest);
+        return Err(err).context("failed to persist skills.sh metadata");
+    }
+
+    match enforce_skill_security_audit(&dest) {
+        Ok(report) => Ok((dest, report.files_scanned)),
+        Err(err) => {
+            let _ = std::fs::remove_dir_all(&dest);
+            Err(err)
+        }
+    }
+}
+
 /// Handle the `skills` CLI command
 #[allow(clippy::too_many_lines)]
 pub fn handle_command(command: crate::SkillCommands, config: &crate::config::Config) -> Result<()> {
@@ -906,13 +1363,32 @@ pub fn handle_command(command: crate::SkillCommands, config: &crate::config::Con
         crate::SkillCommands::Install { source } => {
             println!("Installing skill from: {source}");
 
+            init_skills_dir(workspace_dir)?;
             let skills_path = skills_dir(workspace_dir);
-            std::fs::create_dir_all(&skills_path)?;
+            let mut download_policy = load_or_init_skill_download_policy(&skills_path)?;
+            let source = source.trim().to_string();
+            let resolved_source = resolve_skill_source_alias(&source, &download_policy);
+            if resolved_source != source {
+                println!("  Using configured alias '{source}' -> {resolved_source}");
+            }
+            ensure_source_domain_trust(&resolved_source, &mut download_policy, &skills_path)?;
 
-            if is_git_source(&source) {
+            if is_skills_sh_source(&resolved_source) {
                 let (installed_dir, files_scanned) =
-                    install_git_skill_source(&source, &skills_path)
-                        .with_context(|| format!("failed to install git skill source: {source}"))?;
+                    install_skills_sh_source(&resolved_source, &skills_path).with_context(
+                        || format!("failed to install skills.sh skill: {resolved_source}"),
+                    )?;
+                println!(
+                    "  {} Skill installed from skills.sh: {} ({} files scanned)",
+                    console::style("✓").green().bold(),
+                    installed_dir.display(),
+                    files_scanned
+                );
+            } else if is_git_source(&resolved_source) {
+                let (installed_dir, files_scanned) =
+                    install_git_skill_source(&resolved_source, &skills_path).with_context(
+                        || format!("failed to install git skill source: {resolved_source}"),
+                    )?;
                 println!(
                     "  {} Skill installed and audited: {} ({} files scanned)",
                     console::style("✓").green().bold(),
@@ -920,8 +1396,10 @@ pub fn handle_command(command: crate::SkillCommands, config: &crate::config::Con
                     files_scanned
                 );
             } else {
-                let (dest, files_scanned) = install_local_skill_source(&source, &skills_path)
-                    .with_context(|| format!("failed to install local skill source: {source}"))?;
+                let (dest, files_scanned) =
+                    install_local_skill_source(&resolved_source, &skills_path).with_context(
+                        || format!("failed to install local skill source: {resolved_source}"),
+                    )?;
                 println!(
                     "  {} Skill installed and audited: {} ({} files scanned)",
                     console::style("✓").green().bold(),
@@ -1121,6 +1599,23 @@ command = "echo hello"
         let dir = tempfile::tempdir().unwrap();
         init_skills_dir(dir.path()).unwrap();
         assert!(dir.path().join("skills").join("README.md").exists());
+        assert!(dir
+            .path()
+            .join("skills")
+            .join("find-skills")
+            .join("SKILL.md")
+            .exists());
+        assert!(dir
+            .path()
+            .join("skills")
+            .join("skill-creator")
+            .join("SKILL.md")
+            .exists());
+        assert!(dir
+            .path()
+            .join("skills")
+            .join(".download-policy.toml")
+            .exists());
     }
 
     #[test]
@@ -1129,6 +1624,18 @@ command = "echo hello"
         init_skills_dir(dir.path()).unwrap();
         init_skills_dir(dir.path()).unwrap(); // second call should not fail
         assert!(dir.path().join("skills").join("README.md").exists());
+        assert!(dir
+            .path()
+            .join("skills")
+            .join("find-skills")
+            .join("SKILL.md")
+            .exists());
+        assert!(dir
+            .path()
+            .join("skills")
+            .join("skill-creator")
+            .join("SKILL.md")
+            .exists());
     }
 
     #[test]
@@ -1366,6 +1873,82 @@ description = "Bare minimum"
                 "expected local/invalid source detection for '{source}'"
             );
         }
+    }
+
+    #[test]
+    fn parse_skills_sh_source_accepts_owner_repo_skill_urls() {
+        let parsed = parse_skills_sh_source("https://skills.sh/vercel-labs/skills/find-skills")
+            .expect("should parse skills.sh source");
+        assert_eq!(parsed.owner, "vercel-labs");
+        assert_eq!(parsed.repo, "skills");
+        assert_eq!(parsed.skill, "find-skills");
+
+        let parsed_with_trailing =
+            parse_skills_sh_source("https://skills.sh/anthropics/skills/skill-creator/")
+                .expect("should parse trailing slash");
+        assert_eq!(parsed_with_trailing.owner, "anthropics");
+        assert_eq!(parsed_with_trailing.repo, "skills");
+        assert_eq!(parsed_with_trailing.skill, "skill-creator");
+    }
+
+    #[test]
+    fn parse_skills_sh_source_rejects_invalid_urls() {
+        assert!(parse_skills_sh_source("https://skills.sh/vercel-labs/skills").is_none());
+        assert!(
+            parse_skills_sh_source("https://example.com/vercel-labs/skills/find-skills").is_none()
+        );
+        assert!(parse_skills_sh_source("skills.sh/vercel-labs/skills/find-skills").is_none());
+    }
+
+    #[test]
+    fn default_download_policy_contains_required_preloaded_sources() {
+        let policy = SkillDownloadPolicy::default();
+        assert_eq!(
+            policy.aliases.get("find-skills"),
+            Some(&"https://skills.sh/vercel-labs/skills/find-skills".to_string())
+        );
+        assert_eq!(
+            policy.aliases.get("skill-creator"),
+            Some(&"https://skills.sh/anthropics/skills/skill-creator".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_skill_source_alias_prefers_user_and_default_aliases() {
+        let mut policy = SkillDownloadPolicy::default();
+        policy.aliases.insert(
+            "custom".to_string(),
+            "https://skills.sh/acme/skills/custom".to_string(),
+        );
+
+        assert_eq!(
+            resolve_skill_source_alias("custom", &policy),
+            "https://skills.sh/acme/skills/custom".to_string()
+        );
+        assert_eq!(
+            resolve_skill_source_alias("find-skills", &policy),
+            "https://skills.sh/vercel-labs/skills/find-skills".to_string()
+        );
+        assert_eq!(
+            resolve_skill_source_alias("https://example.com/skill.zip", &policy),
+            "https://example.com/skill.zip".to_string()
+        );
+    }
+
+    #[test]
+    fn host_matches_trusted_domain_supports_subdomains() {
+        assert!(host_matches_trusted_domain("skills.sh", "skills.sh"));
+        assert!(host_matches_trusted_domain("cdn.skills.sh", "skills.sh"));
+        assert!(!host_matches_trusted_domain("evilskills.sh", "skills.sh"));
+    }
+
+    #[test]
+    fn normalize_skills_sh_dir_name_preserves_hyphens() {
+        assert_eq!(normalize_skills_sh_dir_name("find-skills"), "find-skills");
+        assert_eq!(
+            normalize_skills_sh_dir_name("Skill-Creator_2"),
+            "skill-creator_2"
+        );
     }
 
     #[test]
