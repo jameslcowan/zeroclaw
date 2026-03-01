@@ -10,7 +10,7 @@
 
 | Tôi muốn… | Xem tài liệu |
 |---|---|
-| Cài đặt và chạy nhanh | [../../../README.vi.md](../../../README.vi.md) / [../../../README.md](../../../README.md) |
+| Cài đặt và chạy nhanh | [docs/i18n/vi/README.md](README.md) / [../../../README.md](../../../README.md) |
 | Cài đặt bằng một lệnh | [one-click-bootstrap.md](one-click-bootstrap.md) |
 | Cài đặt trên Android (Termux/ADB) | [android-setup.md](android-setup.md) |
 | Tìm lệnh theo tác vụ | [commands-reference.md](commands-reference.md) |
@@ -57,6 +57,7 @@
 - [channels-reference.md](channels-reference.md) — khả năng kênh và hướng dẫn thiết lập
 - [matrix-e2ee-guide.md](matrix-e2ee-guide.md) — thiết lập phòng mã hóa Matrix (E2EE)
 - [config-reference.md](config-reference.md) — khóa cấu hình quan trọng và giá trị mặc định an toàn
+- [wasm-tools-guide.md](wasm-tools-guide.md) — tạo, cài đặt và xuất bản WASM skills
 - [custom-providers.md](custom-providers.md) — mẫu tích hợp provider / base URL tùy chỉnh
 - [zai-glm-setup.md](zai-glm-setup.md) — thiết lập Z.AI/GLM và ma trận endpoint
 - [langgraph-integration.md](langgraph-integration.md) — tích hợp dự phòng cho model/tool-calling

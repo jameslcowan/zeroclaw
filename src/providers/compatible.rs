@@ -936,6 +936,7 @@ fn parse_responses_chat_response(response: ResponsesResponse) -> ProviderChatRes
         tool_calls,
         usage: None,
         reasoning_content: None,
+        quota_metadata: None,
     }
 }
 
@@ -1578,6 +1579,7 @@ impl OpenAiCompatibleProvider {
             tool_calls,
             usage: None,
             reasoning_content,
+            quota_metadata: None,
         }
     }
 
@@ -1946,6 +1948,7 @@ impl Provider for OpenAiCompatibleProvider {
                     tool_calls: vec![],
                     usage: None,
                     reasoning_content: None,
+                    quota_metadata: None,
                 });
             }
         };
@@ -2001,6 +2004,7 @@ impl Provider for OpenAiCompatibleProvider {
             tool_calls,
             usage,
             reasoning_content,
+            quota_metadata: None,
         })
     }
 
@@ -2097,6 +2101,7 @@ impl Provider for OpenAiCompatibleProvider {
                     tool_calls: vec![],
                     usage: None,
                     reasoning_content: None,
+                    quota_metadata: None,
                 });
             }
 
@@ -2425,7 +2430,7 @@ mod tests {
             make_provider("Moonshot", "https://api.moonshot.cn", None),
             make_provider("GLM", "https://open.bigmodel.cn", None),
             make_provider("MiniMax", "https://api.minimaxi.com/v1", None),
-            make_provider("Groq", "https://api.groq.com/openai", None),
+            make_provider("Groq", "https://api.groq.com/openai/v1", None),
             make_provider("Mistral", "https://api.mistral.ai", None),
             make_provider("xAI", "https://api.x.ai", None),
             make_provider("Astrai", "https://as-trai.com/v1", None),
