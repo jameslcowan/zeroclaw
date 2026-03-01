@@ -2110,7 +2110,8 @@ pub(crate) async fn run_tool_call_loop(
 
         let image_marker_count = multimodal::count_image_markers(history);
         // Check vision support: config override takes priority over provider default
-        let vision_supported = supports_vision_override.unwrap_or_else(|| provider.supports_vision());
+        let vision_supported =
+            supports_vision_override.unwrap_or_else(|| provider.supports_vision());
         if image_marker_count > 0 && !vision_supported {
             return Err(ProviderCapabilityError {
                 provider: provider_name.to_string(),
