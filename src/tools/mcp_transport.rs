@@ -95,6 +95,53 @@ impl StdioTransport {
 }
 
 #[async_trait::async_trait]
+trait RawLineReceiver {
+    async fn recv_raw_line(&mut self) -> Result<String>;
+}
+
+#[async_trait::async_trait]
+impl RawLineReceiver for StdioTransport {
+    async fn recv_raw_line(&mut self) -> Result<String> {
+        self.recv_raw().await
+    }
+}
+
+async fn recv_matching_response<R: RawLineReceiver>(
+    receiver: &mut R,
+    expected_id: &serde_json::Value,
+    timeout_total: Duration,
+) -> Result<JsonRpcResponse> {
+    let deadline = std::time::Instant::now() + timeout_total;
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            bail!("timeout waiting for MCP response");
+        }
+
+        let resp_line = timeout(remaining, receiver.recv_raw_line())
+            .await
+            .context("timeout waiting for MCP response")??;
+
+        let resp: JsonRpcResponse = serde_json::from_str(&resp_line)
+            .with_context(|| format!("invalid JSON-RPC response: {}", resp_line))?;
+
+        if resp.id.is_none() {
+            tracing::debug!("MCP stdio: skipping server notification while waiting for response");
+            continue;
+        }
+
+        if resp.id.as_ref() != Some(expected_id) {
+            tracing::debug!(
+                "MCP stdio: skipping response for unexpected id while waiting for request id"
+            );
+            continue;
+        }
+
+        return Ok(resp);
+    }
+}
+
+#[async_trait::async_trait]
 impl McpTransportConn for StdioTransport {
     async fn send_and_recv(&mut self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
         let line = serde_json::to_string(request)?;
@@ -107,12 +154,13 @@ impl McpTransportConn for StdioTransport {
                 error: None,
             });
         }
-        let resp_line = timeout(Duration::from_secs(RECV_TIMEOUT_SECS), self.recv_raw())
-            .await
-            .context("timeout waiting for MCP response")??;
-        let resp: JsonRpcResponse = serde_json::from_str(&resp_line)
-            .with_context(|| format!("invalid JSON-RPC response: {}", resp_line))?;
-        Ok(resp)
+
+        let expected_id = request
+            .id
+            .as_ref()
+            .ok_or_else(|| anyhow!("MCP request missing id for response matching"))?;
+
+        recv_matching_response(self, expected_id, Duration::from_secs(RECV_TIMEOUT_SECS)).await
     }
 
     async fn close(&mut self) -> Result<()> {
@@ -810,6 +858,54 @@ pub fn create_transport(config: &McpServerConfig) -> Result<Box<dyn McpTransport
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct MockLineReceiver {
+        scripted: std::collections::VecDeque<(Duration, String)>,
+        repeat: Option<(Duration, String)>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl MockLineReceiver {
+        fn scripted(lines: Vec<(Duration, &str)>) -> Self {
+            Self {
+                scripted: lines
+                    .into_iter()
+                    .map(|(delay, line)| (delay, line.to_string()))
+                    .collect(),
+                repeat: None,
+                calls: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn repeating(delay: Duration, line: &str, calls: Arc<AtomicUsize>) -> Self {
+            Self {
+                scripted: std::collections::VecDeque::new(),
+                repeat: Some((delay, line.to_string())),
+                calls,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RawLineReceiver for MockLineReceiver {
+        async fn recv_raw_line(&mut self) -> Result<String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+
+            if let Some((delay, line)) = self.scripted.pop_front() {
+                tokio::time::sleep(delay).await;
+                return Ok(line);
+            }
+
+            if let Some((delay, line)) = &self.repeat {
+                tokio::time::sleep(*delay).await;
+                return Ok(line.clone());
+            }
+
+            bail!("mock stream exhausted")
+        }
+    }
 
     #[test]
     fn test_transport_default_is_stdio() {
@@ -871,5 +967,81 @@ mod tests {
             ": keep-alive\n\nid: 1\nevent: message\ndata: {\"jsonrpc\":\"2.0\",\"result\":{}}\n\n";
         let extracted = extract_json_from_sse_text(input);
         let _: JsonRpcResponse = serde_json::from_str(extracted.as_ref()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_recv_matching_response_skips_notifications_and_mismatched_ids() {
+        let mut receiver = MockLineReceiver::scripted(vec![
+            (
+                Duration::from_millis(0),
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#,
+            ),
+            (
+                Duration::from_millis(0),
+                r#"{"jsonrpc":"2.0","id":999,"result":{"tools":[{"name":"stale"}]}}"#,
+            ),
+            (
+                Duration::from_millis(0),
+                r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"ok"}]}}"#,
+            ),
+        ]);
+        let expected_id = serde_json::json!(2);
+
+        let resp = recv_matching_response(&mut receiver, &expected_id, Duration::from_millis(200))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.id, Some(expected_id));
+        assert_eq!(
+            resp.result
+                .as_ref()
+                .and_then(|v| v.get("tools"))
+                .and_then(|v| v.as_array())
+                .map(|v| v.len()),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_recv_matching_response_notification_only_times_out() {
+        let expected_id = serde_json::json!(2);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut receiver = MockLineReceiver::repeating(
+            Duration::from_millis(5),
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#,
+            Arc::clone(&calls),
+        );
+
+        let result =
+            recv_matching_response(&mut receiver, &expected_id, Duration::from_millis(50)).await;
+
+        let err = result.expect_err("notification-only stream should time out");
+        assert!(format!("{err:#}").contains("timeout waiting for MCP response"));
+        assert!(
+            calls.load(Ordering::SeqCst) >= 1,
+            "receiver should have consumed at least one notification before timeout"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_recv_matching_response_timeout_budget_not_reset() {
+        let expected_id = serde_json::json!(2);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let mut receiver = MockLineReceiver::repeating(
+            Duration::from_millis(35),
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#,
+            Arc::clone(&attempts),
+        );
+
+        let result =
+            recv_matching_response(&mut receiver, &expected_id, Duration::from_millis(60)).await;
+
+        let err = result.expect_err("deadline should be shared across skipped notifications");
+        assert!(format!("{err:#}").contains("timeout waiting for MCP response"));
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "second receive attempt should start and then time out under the original deadline"
+        );
     }
 }
