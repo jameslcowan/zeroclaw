@@ -7,6 +7,37 @@ set -euo pipefail
 BIN_DIR="${1:-${RUNNER_TEMP:-/tmp}/bin}"
 VERSION="${2:-${SYFT_VERSION:-v1.42.1}}"
 
+download_file() {
+  local url="$1"
+  local output="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -sSfL "${url}" -o "${output}"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "${output}" "${url}"
+  else
+    echo "Missing downloader: install curl or wget" >&2
+    return 1
+  fi
+}
+
+verify_sha256() {
+  local file="$1"
+  local expected="$2"
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "${expected}  ${file}" | sha256sum -c -
+  elif command -v shasum >/dev/null 2>&1; then
+    local actual
+    actual="$(shasum -a 256 "${file}" | awk '{print $1}')"
+    if [ "${actual}" != "${expected}" ]; then
+      echo "SHA256 mismatch for ${file}" >&2
+      return 1
+    fi
+  else
+    echo "Missing checksum tool: install sha256sum or shasum" >&2
+    return 1
+  fi
+}
+
 os_name="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "$os_name" in
   linux|darwin) ;;
@@ -35,18 +66,16 @@ mkdir -p "${BIN_DIR}"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
 
-curl -sSfL "${BASE_URL}/${ARCHIVE}" -o "${tmp_dir}/${ARCHIVE}"
-curl -sSfL "${BASE_URL}/${CHECKSUMS}" -o "${tmp_dir}/${CHECKSUMS}"
+download_file "${BASE_URL}/${ARCHIVE}" "${tmp_dir}/${ARCHIVE}"
+download_file "${BASE_URL}/${CHECKSUMS}" "${tmp_dir}/${CHECKSUMS}"
 
-awk -v target="${ARCHIVE}" '$2 == target {print $1 "  " $2}' "${tmp_dir}/${CHECKSUMS}" > "${tmp_dir}/syft.sha256"
-if [ ! -s "${tmp_dir}/syft.sha256" ]; then
+expected_checksum="$(awk -v target="${ARCHIVE}" '$2 == target {print $1}' "${tmp_dir}/${CHECKSUMS}" | head -n1)"
+if [ -z "${expected_checksum}" ]; then
   echo "Missing checksum entry for ${ARCHIVE} in ${CHECKSUMS}" >&2
   exit 1
 fi
-(
-  cd "${tmp_dir}"
-  sha256sum -c syft.sha256
-)
+
+verify_sha256 "${tmp_dir}/${ARCHIVE}" "${expected_checksum}"
 
 tar -xzf "${tmp_dir}/${ARCHIVE}" -C "${tmp_dir}" syft
 install -m 0755 "${tmp_dir}/syft" "${BIN_DIR}/syft"
