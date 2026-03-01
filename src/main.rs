@@ -61,7 +61,6 @@ mod agent;
 mod approval;
 mod auth;
 mod channels;
-mod rag;
 mod config;
 mod coordination;
 mod cost;
@@ -84,6 +83,7 @@ mod onboard;
 mod peripherals;
 mod plugins;
 mod providers;
+mod rag;
 mod runtime;
 mod security;
 mod service;
@@ -773,6 +773,15 @@ enum MemoryCommands {
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
+    },
+    /// Rebuild embeddings for all memories (use after changing embedding model)
+    Reindex {
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+        /// Show progress during reindex
+        #[arg(long, default_value = "true")]
+        progress: bool,
     },
 }
 
