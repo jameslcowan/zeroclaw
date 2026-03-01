@@ -11862,6 +11862,8 @@ provider_api = "not-a-real-mode"
                     name: Some("sub2api".to_string()),
                     base_url: Some("https://api.tonsof.blue/v1".to_string()),
                     wire_api: None,
+                    default_model: None,
+                    api_key: None,
                     requires_openai_auth: false,
                     tls_ca_cert_path: Some("~/.zeroclaw/ca.crt".to_string()),
                     tls_insecure: true,
@@ -12119,6 +12121,8 @@ provider_api = "not-a-real-mode"
                     default_model: None,
                     api_key: Some("profile-api-key".to_string()),
                     requires_openai_auth: false,
+                    tls_ca_cert_path: None,
+                    tls_insecure: false,
                 },
             )]),
             ..Config::default()
@@ -12143,6 +12147,8 @@ provider_api = "not-a-real-mode"
                     default_model: Some("qwen-max".to_string()),
                     api_key: None,
                     requires_openai_auth: false,
+                    tls_ca_cert_path: None,
+                    tls_insecure: false,
                 },
             )]),
             ..Config::default()
