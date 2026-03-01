@@ -7031,6 +7031,27 @@ fn validate_mcp_config(config: &McpConfig) -> Result<()> {
     Ok(())
 }
 
+fn warn_or_explain_ignored_config_key(path: &str) {
+    match path {
+        "channels_config.feishu.mention_only" => {
+            tracing::warn!(
+                "Config key \"{path}\" is legacy for Feishu and ignored. Use [channels_config.feishu.group_reply].mode = \"mention_only\" when mention gating is needed."
+            );
+        }
+        "channels_config.feishu.use_feishu" => {
+            tracing::warn!(
+                "Config key \"{path}\" is ignored in [channels_config.feishu] (Feishu mode is implied). Remove this legacy key."
+            );
+        }
+        _ => {
+            tracing::warn!(
+                "Unknown config key ignored: \"{}\". Check config.toml for typos or deprecated options.",
+                path
+            );
+        }
+    }
+}
+
 impl Config {
     pub async fn load_or_init() -> Result<Self> {
         let (default_zeroclaw_dir, default_workspace_dir) = default_config_and_workspace_dirs()?;
@@ -7082,10 +7103,7 @@ impl Config {
 
             // Warn about each unknown config key
             for path in ignored_paths {
-                tracing::warn!(
-                    "Unknown config key ignored: \"{}\". Check config.toml for typos or deprecated options.",
-                    path
-                );
+                warn_or_explain_ignored_config_key(&path);
             }
             // Set computed paths that are skipped during serialization
             config.config_path = config_path.clone();
@@ -13107,6 +13125,16 @@ default_model = "legacy-model"
             parsed.group_reply_allowed_sender_ids(),
             vec!["ou_9".to_string()]
         );
+    }
+
+    #[test]
+    async fn ignored_key_warning_uses_feishu_legacy_explanation_for_mention_only() {
+        warn_or_explain_ignored_config_key("channels_config.feishu.mention_only");
+    }
+
+    #[test]
+    async fn ignored_key_warning_uses_feishu_legacy_explanation_for_use_feishu() {
+        warn_or_explain_ignored_config_key("channels_config.feishu.use_feishu");
     }
 
     #[test]

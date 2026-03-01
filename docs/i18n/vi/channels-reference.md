@@ -73,7 +73,8 @@ Lưu ý vận hành:
 
 Hỗ trợ Matrix và Lark/Feishu được kiểm soát tại thời điểm biên dịch bằng Cargo features.
 
-- Bản build mặc định bao gồm Lark/Feishu (`default = ["channel-lark"]`), còn Matrix là opt-in.
+- Bản build từ mã nguồn mặc định dùng feature tối thiểu (`default = []`).
+- Docker image chính thức bật Lark/Feishu mặc định (`channel-lark`), còn Matrix là opt-in.
 - Để lặp lại nhanh hơn khi không cần Matrix/Lark:
 
 ```bash

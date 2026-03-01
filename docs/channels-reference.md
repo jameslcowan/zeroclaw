@@ -100,7 +100,8 @@ Operational notes:
 
 Matrix and Lark support are controlled at compile time.
 
-- Default builds include Lark/Feishu (`default = ["channel-lark"]`), while Matrix remains opt-in.
+- Source builds default to a minimal feature set (`default = []`).
+- Official Docker images enable Lark/Feishu by default (`channel-lark`), while Matrix remains opt-in.
 - For a lean local build without Matrix/Lark:
 
 ```bash
