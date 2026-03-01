@@ -867,7 +867,7 @@ Environment overrides:
 | `allow_sensitive_file_writes` | `false` | allow `file_write`/`file_edit` on sensitive files/dirs (for example `.env`, `.aws/credentials`, private keys) |
 | `auto_approve` | `[]` | tool operations always auto-approved |
 | `always_ask` | `[]` | tool operations that always require approval |
-| `non_cli_excluded_tools` | `[]` | tools hidden from non-CLI channel tool specs |
+| `non_cli_excluded_tools` | see below | tools hidden from non-CLI channel tool specs |
 | `non_cli_approval_approvers` | `[]` | optional allowlist for who can run non-CLI approval-management commands |
 | `non_cli_natural_language_approval_mode` | `direct` | natural-language behavior for approval-management commands (`direct`, `request_confirm`, `disabled`) |
 | `non_cli_natural_language_approval_mode_by_channel` | `{}` | per-channel override map for natural-language approval mode |
@@ -902,6 +902,7 @@ Notes:
 - Use `/unapprove <tool>` to remove persisted approval from `autonomy.auto_approve`.
 - `/approve-pending` lists pending requests for the current sender+chat/channel scope.
 - If a tool remains unavailable after approval, check `autonomy.non_cli_excluded_tools` (runtime `/approvals` shows this list). Channel runtime reloads this list from `config.toml` automatically.
+- `non_cli_excluded_tools` defaults to a security-conscious list: `shell`, `process`, `file_write`, `file_edit`, `git_operations`, `browser`, `browser_open`, `http_request`, `schedule`, `cron_add`, `cron_remove`, `cron_update`, `cron_run`, `memory_store`, `memory_forget`, `proxy_config`, `web_search_config`, `web_access_config`, `model_routing_config`, `channel_ack_config`, `pushover`, `composio`, `delegate`, `screenshot`, `image_info`. To enable a tool for non-CLI channels, remove it from this list in your `config.toml`.
 
 ```toml
 [autonomy]
