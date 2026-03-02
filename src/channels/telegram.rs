@@ -589,6 +589,15 @@ impl TelegramChannel {
         body
     }
 
+    fn build_edit_message_body(chat_id: &str, message_id: i64, text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": Self::markdown_to_telegram_html(text),
+            "parse_mode": "HTML",
+        })
+    }
+
     fn build_approval_prompt_body(
         chat_id: &str,
         thread_id: Option<&str>,
@@ -2897,11 +2906,7 @@ impl Channel for TelegramChannel {
             }
         };
 
-        let body = serde_json::json!({
-            "chat_id": chat_id,
-            "message_id": message_id_parsed,
-            "text": display_text,
-        });
+        let body = Self::build_edit_message_body(&chat_id, message_id_parsed, display_text);
 
         let resp = self
             .client
@@ -3006,12 +3011,7 @@ impl Channel for TelegramChannel {
         };
 
         // Try editing with HTML formatting
-        let body = serde_json::json!({
-            "chat_id": chat_id,
-            "message_id": id,
-            "text": Self::markdown_to_telegram_html(text),
-            "parse_mode": "HTML",
-        });
+        let body = Self::build_edit_message_body(&chat_id, id, text);
 
         let resp = self
             .client
@@ -3689,6 +3689,18 @@ mod tests {
         assert!(body["text"]
             .as_str()
             .is_some_and(|text| text.contains("`shell`")));
+    }
+
+    #[test]
+    fn edit_message_body_uses_html_parse_mode() {
+        let body = TelegramChannel::build_edit_message_body("123", 42, "**bold** and `code`");
+        assert_eq!(body["chat_id"], "123");
+        assert_eq!(body["message_id"], 42);
+        assert_eq!(body["parse_mode"], "HTML");
+        assert_eq!(
+            body["text"],
+            TelegramChannel::markdown_to_telegram_html("**bold** and `code`")
+        );
     }
 
     #[test]
