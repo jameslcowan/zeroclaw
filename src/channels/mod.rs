@@ -5287,10 +5287,35 @@ async fn append_nostr_channel_if_available(
     }
 }
 
+fn feature_gated_channel_notices(config: &Config) -> Vec<String> {
+    let mut notices = Vec::new();
+
+    #[cfg(not(feature = "channel-lark"))]
+    if config.channels_config.lark.is_some() || config.channels_config.feishu.is_some() {
+        notices.push(
+            "Lark/Feishu is configured but this binary was built without `channel-lark`; \
+             rebuild with `--features channel-lark` or use a release artifact that includes it."
+                .to_string(),
+        );
+    }
+
+    #[cfg(not(feature = "channel-matrix"))]
+    if config.channels_config.matrix.is_some() {
+        notices.push(
+            "Matrix is configured but this binary was built without `channel-matrix`; \
+             rebuild with `--features channel-matrix` or use a release artifact that includes it."
+                .to_string(),
+        );
+    }
+
+    notices
+}
+
 /// Run health checks for configured channels.
 pub async fn doctor_channels(config: Config) -> Result<()> {
     let mut channels = collect_configured_channels(&config, "health check");
     let mut init_failures = Vec::new();
+    let gated_notices = feature_gated_channel_notices(&config);
 
     if let Some(reason) =
         append_nostr_channel_if_available(&config, &mut channels, "health check").await
@@ -5299,12 +5324,26 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
     }
 
     if channels.is_empty() && init_failures.is_empty() {
+        if !gated_notices.is_empty() {
+            println!("Configured channels are unavailable in this build:");
+            for notice in gated_notices {
+                println!("  ⚠️  {notice}");
+            }
+            return Ok(());
+        }
         println!("No real-time channels configured. Run `zeroclaw onboard` first.");
         return Ok(());
     }
 
     println!("🩺 ZeroClaw Channel Doctor");
     println!();
+
+    if !gated_notices.is_empty() {
+        for notice in &gated_notices {
+            println!("  ⚠️  {notice}");
+        }
+        println!();
+    }
 
     let mut healthy = 0_u32;
     let mut unhealthy = u32::try_from(init_failures.len()).unwrap_or(u32::MAX);
@@ -5611,6 +5650,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
     // Collect active channels from a shared builder to keep startup and doctor parity.
     let mut configured_channels = collect_configured_channels(&config, "runtime startup");
     let mut init_failures = Vec::new();
+    let gated_notices = feature_gated_channel_notices(&config);
     if let Some(reason) =
         append_nostr_channel_if_available(&config, &mut configured_channels, "runtime startup")
             .await
@@ -5619,6 +5659,13 @@ pub async fn start_channels(config: Config) -> Result<()> {
     }
 
     if configured_channels.is_empty() && init_failures.is_empty() {
+        if !gated_notices.is_empty() {
+            println!("Configured channels are unavailable in this build:");
+            for notice in gated_notices {
+                println!("  ⚠️  {notice}");
+            }
+            anyhow::bail!("No runnable channels in this build.");
+        }
         println!("No channels configured. Run `zeroclaw onboard` to set up channels.");
         return Ok(());
     }
@@ -5633,6 +5680,13 @@ pub async fn start_channels(config: Config) -> Result<()> {
     if !init_failures.is_empty() {
         for failure in &init_failures {
             println!("  ⚠️  {failure}");
+        }
+        println!();
+    }
+
+    if !gated_notices.is_empty() {
+        for notice in &gated_notices {
+            println!("  ⚠️  {notice}");
         }
         println!();
     }
@@ -12069,6 +12123,52 @@ BTC is currently around $65,000 based on latest tool output."#;
         assert!(channels
             .iter()
             .any(|entry| entry.channel.name() == "dingtalk"));
+    }
+
+    #[cfg(not(feature = "channel-lark"))]
+    #[test]
+    fn feature_gated_channel_notices_reports_lark_and_feishu() {
+        let mut config = Config::default();
+        config.channels_config.feishu = Some(crate::config::FeishuConfig {
+            app_id: "feishu-app".to_string(),
+            app_secret: "feishu-secret".to_string(),
+            encrypt_key: None,
+            verification_token: None,
+            allowed_users: vec!["*".to_string()],
+            group_reply: None,
+            receive_mode: crate::config::schema::LarkReceiveMode::Websocket,
+            port: None,
+            draft_update_interval_ms: 3_000,
+            max_draft_edits: 20,
+        });
+
+        let notices = feature_gated_channel_notices(&config);
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("channel-lark"));
+        assert!(notices[0].contains("Lark/Feishu"));
+    }
+
+    #[cfg(not(feature = "channel-matrix"))]
+    #[test]
+    fn feature_gated_channel_notices_reports_matrix() {
+        let mut config = Config::default();
+        config.channels_config.matrix = Some(crate::config::MatrixConfig {
+            homeserver: "https://matrix.example.com".to_string(),
+            access_token: "matrix-token".to_string(),
+            user_id: Some("@bot:matrix.example.com".to_string()),
+            device_id: None,
+            room_id: "!room:example.com".to_string(),
+            allowed_users: vec!["*".to_string()],
+            mention_only: false,
+        });
+
+        let notices = feature_gated_channel_notices(&config);
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("channel-matrix")),
+            "matrix notice should mention channel-matrix feature gate"
+        );
     }
 
     struct AlwaysFailChannel {

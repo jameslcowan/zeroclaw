@@ -99,6 +99,20 @@ impl LarkPlatform {
             Self::Feishu => "feishu",
         }
     }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Lark => "Lark",
+            Self::Feishu => "Feishu",
+        }
+    }
+
+    fn config_table(self) -> &'static str {
+        match self {
+            Self::Lark => "[channels_config.lark]",
+            Self::Feishu => "[channels_config.feishu]",
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1958,6 +1972,14 @@ impl LarkChannel {
         &self,
         tx: tokio::sync::mpsc::Sender<ChannelMessage>,
     ) -> anyhow::Result<()> {
+        let port = self.port.ok_or_else(|| {
+            anyhow::anyhow!(
+                "{} webhook mode requires `port` to be set in {}",
+                self.platform.display_name(),
+                self.platform.config_table()
+            )
+        })?;
+
         self.ensure_bot_open_id().await;
         use axum::{extract::State, routing::post, Json, Router};
 
@@ -2053,10 +2075,6 @@ impl LarkChannel {
             (StatusCode::OK, "ok").into_response()
         }
 
-        let port = self.port.ok_or_else(|| {
-            anyhow::anyhow!("Lark webhook mode requires `port` to be set in [channels_config.lark]")
-        })?;
-
         let state = AppState {
             verification_token: self.verification_token.clone(),
             channel: Arc::new(self.clone()),
@@ -2068,7 +2086,10 @@ impl LarkChannel {
             .with_state(state);
 
         let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-        tracing::info!("Lark event callback server listening on {addr}");
+        tracing::info!(
+            "{} event callback server listening on {addr}",
+            self.platform.display_name()
+        );
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
         axum::serve(listener, app).await?;
@@ -3248,6 +3269,56 @@ mod tests {
         assert_eq!(ch.api_base(), FEISHU_BASE_URL);
         assert_eq!(ch.ws_base(), FEISHU_WS_BASE_URL);
         assert_eq!(ch.name(), "feishu");
+    }
+
+    #[tokio::test]
+    async fn listen_http_missing_port_reports_lark_config_path() {
+        let channel = LarkChannel::new(
+            "cli_app123".into(),
+            "secret456".into(),
+            "vtoken789".into(),
+            None,
+            vec!["*".into()],
+            false,
+        );
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+        let err = channel
+            .listen_http(tx)
+            .await
+            .expect_err("listen_http should fail when webhook port is missing");
+
+        assert!(err
+            .to_string()
+            .contains("Lark webhook mode requires `port` to be set in [channels_config.lark]"));
+    }
+
+    #[tokio::test]
+    async fn listen_http_missing_port_reports_feishu_config_path() {
+        use crate::config::schema::{FeishuConfig, LarkReceiveMode};
+
+        let channel = LarkChannel::from_feishu_config(&FeishuConfig {
+            app_id: "cli_feishu_app123".into(),
+            app_secret: "secret456".into(),
+            encrypt_key: None,
+            verification_token: Some("vtoken789".into()),
+            allowed_users: vec!["*".into()],
+            group_reply: None,
+            receive_mode: LarkReceiveMode::Webhook,
+            port: None,
+            draft_update_interval_ms: 3_000,
+            max_draft_edits: 20,
+        });
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+        let err = channel
+            .listen_http(tx)
+            .await
+            .expect_err("listen_http should fail when webhook port is missing");
+
+        assert!(err
+            .to_string()
+            .contains("Feishu webhook mode requires `port` to be set in [channels_config.feishu]"));
     }
 
     #[test]
