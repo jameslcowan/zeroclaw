@@ -108,7 +108,26 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
     println!("   Components: gateway, channels, heartbeat, scheduler");
     println!("   Ctrl+C to stop");
 
-    tokio::signal::ctrl_c().await?;
+    // Wait for either SIGINT (Ctrl+C) or SIGTERM (container/service managers).
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("Received SIGINT, initiating graceful shutdown");
+            }
+            _ = sigterm.recv() => {
+                tracing::info!("Received SIGTERM, initiating graceful shutdown");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await?;
+        tracing::info!("Received SIGINT, initiating graceful shutdown");
+    }
     crate::health::mark_component_error("daemon", "shutdown requested");
 
     for handle in &handles {
