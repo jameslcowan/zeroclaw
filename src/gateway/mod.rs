@@ -31,7 +31,7 @@ use crate::util::truncate_with_ellipsis;
 use anyhow::{Context, Result};
 use axum::{
     body::{Body, Bytes},
-    extract::{ConnectInfo, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{delete, get, post, put},
@@ -43,6 +43,8 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
@@ -870,6 +872,10 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/ws/chat", get(ws::handle_ws_chat))
         // ── Static assets (web dashboard) ──
         .route("/_app/{*path}", get(static_files::handle_static))
+        // ── Optional path-scoped webhook transforms ──
+        // Catch-all POST route for custom webhook transform paths configured under
+        // [channels_config.webhook.transforms]. Explicit routes above still take precedence.
+        .route("/{*path}", post(handle_webhook_transform_path))
         // ── Config PUT with larger body limit ──
         .merge(config_put_router)
         .with_state(state)
@@ -1578,28 +1584,44 @@ fn handle_webhook_streaming(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// POST /webhook — main webhook endpoint
-async fn handle_webhook(
-    State(state): State<AppState>,
-    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    body: Result<Json<WebhookBody>, axum::extract::rejection::JsonRejection>,
-) -> Response {
-    let rate_key =
-        client_key_from_request(Some(peer_addr), &headers, state.trust_forwarded_headers);
+fn resolve_webhook_transform_for_path(
+    config: &Config,
+    request_path: &str,
+) -> Option<crate::config::schema::WebhookTransformConfig> {
+    let normalized_request = crate::config::schema::normalize_webhook_transform_path(request_path)?;
+    let webhook = config.channels_config.webhook.as_ref()?;
+
+    webhook.transforms.iter().find_map(|transform| {
+        let normalized_candidate =
+            crate::config::schema::normalize_webhook_transform_path(&transform.path)?;
+        if normalized_candidate == normalized_request {
+            Some(transform.clone())
+        } else {
+            None
+        }
+    })
+}
+
+fn enforce_webhook_request_guards(
+    state: &AppState,
+    peer_addr: SocketAddr,
+    headers: &HeaderMap,
+    request_path: &str,
+) -> Option<Response> {
+    let rate_key = client_key_from_request(Some(peer_addr), headers, state.trust_forwarded_headers);
     if !state.rate_limiter.allow_webhook(&rate_key) {
-        tracing::warn!("/webhook rate limit exceeded");
+        tracing::warn!("{request_path} rate limit exceeded");
         let err = serde_json::json!({
             "error": "Too many webhook requests. Please retry later.",
             "retry_after": RATE_LIMIT_WINDOW_SECS,
         });
-        return (StatusCode::TOO_MANY_REQUESTS, Json(err)).into_response();
+        return Some((StatusCode::TOO_MANY_REQUESTS, Json(err)).into_response());
     }
 
     // Require at least one auth layer for non-loopback traffic.
     if !state.pairing.require_pairing()
         && state.webhook_secret_hash.is_none()
-        && !is_loopback_request(Some(peer_addr), &headers, state.trust_forwarded_headers)
+        && !is_loopback_request(Some(peer_addr), headers, state.trust_forwarded_headers)
     {
         tracing::warn!(
             "Webhook: rejected unauthenticated non-loopback request (pairing disabled and no webhook secret configured)"
@@ -1607,7 +1629,7 @@ async fn handle_webhook(
         let err = serde_json::json!({
             "error": "Unauthorized — configure pairing or X-Webhook-Secret for non-local webhook access"
         });
-        return (StatusCode::UNAUTHORIZED, Json(err)).into_response();
+        return Some((StatusCode::UNAUTHORIZED, Json(err)).into_response());
     }
 
     // ── Bearer token auth (pairing) ──
@@ -1622,7 +1644,7 @@ async fn handle_webhook(
             let err = serde_json::json!({
                 "error": "Unauthorized — pair first via POST /pair, then send Authorization: Bearer <token>"
             });
-            return (StatusCode::UNAUTHORIZED, Json(err)).into_response();
+            return Some((StatusCode::UNAUTHORIZED, Json(err)).into_response());
         }
     }
 
@@ -1639,24 +1661,15 @@ async fn handle_webhook(
             _ => {
                 tracing::warn!("Webhook: rejected request — invalid or missing X-Webhook-Secret");
                 let err = serde_json::json!({"error": "Unauthorized — invalid or missing X-Webhook-Secret header"});
-                return (StatusCode::UNAUTHORIZED, Json(err)).into_response();
+                return Some((StatusCode::UNAUTHORIZED, Json(err)).into_response());
             }
         }
     }
 
-    // ── Parse body ──
-    let Json(webhook_body) = match body {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!("Webhook JSON parse error: {e}");
-            let err = serde_json::json!({
-                "error": "Invalid JSON body. Expected: {\"message\": \"...\"}"
-            });
-            return (StatusCode::BAD_REQUEST, Json(err)).into_response();
-        }
-    };
+    None
+}
 
-    // ── Idempotency (optional) ──
+fn enforce_webhook_idempotency(state: &AppState, headers: &HeaderMap) -> Option<Response> {
     if let Some(idempotency_key) = headers
         .get("X-Idempotency-Key")
         .and_then(|v| v.to_str().ok())
@@ -1670,10 +1683,90 @@ async fn handle_webhook(
                 "idempotent": true,
                 "message": "Request already processed for this idempotency key"
             });
-            return (StatusCode::OK, Json(body)).into_response();
+            return Some((StatusCode::OK, Json(body)).into_response());
         }
     }
+    None
+}
 
+async fn run_webhook_transform(
+    transform: &crate::config::schema::WebhookTransformConfig,
+    payload: &[u8],
+) -> anyhow::Result<Option<WebhookBody>> {
+    let mut command = Command::new(&transform.command[0]);
+    if transform.command.len() > 1 {
+        command.args(&transform.command[1..]);
+    }
+    command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = command.spawn().with_context(|| {
+        format!(
+            "failed to spawn webhook transform command '{}'",
+            transform.command[0]
+        )
+    })?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(payload)
+            .await
+            .context("failed to write webhook payload to transform stdin")?;
+    }
+
+    let output = tokio::time::timeout(
+        Duration::from_millis(transform.timeout_ms),
+        child.wait_with_output(),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "webhook transform timed out after {} ms",
+            transform.timeout_ms
+        )
+    })?
+    .context("failed waiting for webhook transform output")?;
+
+    if output.stdout.len() > transform.max_output_bytes {
+        anyhow::bail!(
+            "webhook transform output exceeded max_output_bytes ({} > {})",
+            output.stdout.len(),
+            transform.max_output_bytes
+        );
+    }
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "webhook transform exited with status {}: {}",
+            output.status.code().unwrap_or(-1),
+            truncate_with_ellipsis(stderr.trim(), 240)
+        );
+    }
+
+    let stdout =
+        String::from_utf8(output.stdout).context("webhook transform stdout is not valid UTF-8")?;
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("webhook transform output is empty");
+    }
+
+    let transformed_value: serde_json::Value =
+        serde_json::from_str(trimmed).context("webhook transform output must be valid JSON")?;
+    if transformed_value.is_null() {
+        return Ok(None);
+    }
+
+    let webhook_body: WebhookBody = serde_json::from_value(transformed_value).context(
+        "webhook transform output must match webhook schema ({\"message\":\"...\", \"stream\"?, \"session_id\"?})",
+    )?;
+    Ok(Some(webhook_body))
+}
+
+async fn process_webhook_body(state: AppState, webhook_body: WebhookBody) -> Response {
     let message = webhook_body.message.trim();
     let webhook_session_id = webhook_body
         .session_id
@@ -1848,6 +1941,94 @@ async fn handle_webhook(
             let err = serde_json::json!({"error": "LLM request failed"});
             (StatusCode::INTERNAL_SERVER_ERROR, Json(err)).into_response()
         }
+    }
+}
+
+/// POST /webhook — main webhook endpoint
+async fn handle_webhook(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: Result<Json<WebhookBody>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    if let Some(response) = enforce_webhook_request_guards(&state, peer_addr, &headers, "/webhook")
+    {
+        return response;
+    }
+
+    let Json(webhook_body) = match body {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            tracing::warn!("Webhook JSON parse error: {e}");
+            let err = serde_json::json!({
+                "error": "Invalid JSON body. Expected: {\"message\": \"...\"}"
+            });
+            return (StatusCode::BAD_REQUEST, Json(err)).into_response();
+        }
+    };
+
+    if let Some(response) = enforce_webhook_idempotency(&state, &headers) {
+        return response;
+    }
+
+    process_webhook_body(state, webhook_body).await
+}
+
+/// POST /<custom-path> — path-scoped webhook transform endpoint.
+async fn handle_webhook_transform_path(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    Path(path): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request_path = format!("/{}", path.trim_start_matches('/'));
+
+    let Some(transform) = ({
+        let cfg = state.config.lock();
+        resolve_webhook_transform_for_path(&cfg, &request_path)
+    }) else {
+        let err = serde_json::json!({"error": "Not found"});
+        return (StatusCode::NOT_FOUND, Json(err)).into_response();
+    };
+
+    if let Some(response) =
+        enforce_webhook_request_guards(&state, peer_addr, &headers, &request_path)
+    {
+        return response;
+    }
+
+    if let Some(response) = enforce_webhook_idempotency(&state, &headers) {
+        return response;
+    }
+
+    let transformed_body = match run_webhook_transform(&transform, &body).await {
+        Ok(body) => body,
+        Err(err) => {
+            let sanitized = providers::sanitize_api_error(&err.to_string());
+            tracing::warn!(
+                "Webhook transform failed for path '{}': {}",
+                request_path,
+                sanitized
+            );
+            let err = serde_json::json!({
+                "error": "Webhook transform failed",
+                "path": request_path,
+            });
+            return (StatusCode::BAD_REQUEST, Json(err)).into_response();
+        }
+    };
+
+    match transformed_body {
+        None => {
+            let body = serde_json::json!({
+                "status": "discarded",
+                "transformed": true,
+                "path": request_path
+            });
+            (StatusCode::OK, Json(body)).into_response()
+        }
+        Some(webhook_body) => process_webhook_body(state, webhook_body).await,
     }
 }
 
@@ -2928,6 +3109,90 @@ mod tests {
         assert_eq!(parsed["method"], "POST");
         assert_eq!(parsed["path"], "/webhook");
         assert_eq!(parsed["example"]["message"], "Hello from webhook");
+    }
+
+    #[test]
+    fn resolve_webhook_transform_for_path_matches_normalized_path() {
+        let mut config = Config::default();
+        config.channels_config.webhook = Some(crate::config::schema::WebhookConfig {
+            port: 8080,
+            secret: None,
+            transforms: vec![crate::config::schema::WebhookTransformConfig {
+                path: "hooks/github".to_string(),
+                command: vec!["sh".to_string(), "-c".to_string(), "cat".to_string()],
+                timeout_ms: 1000,
+                max_output_bytes: 1024,
+            }],
+        });
+
+        let found = resolve_webhook_transform_for_path(&config, "/hooks/github");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().path, "hooks/github");
+
+        let missing = resolve_webhook_transform_for_path(&config, "/hooks/unknown");
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn run_webhook_transform_supports_discard_via_null_output() {
+        let transform = crate::config::schema::WebhookTransformConfig {
+            path: "/hooks/discard".to_string(),
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "cat >/dev/null; printf null".to_string(),
+            ],
+            timeout_ms: 2000,
+            max_output_bytes: 1024,
+        };
+
+        let output = run_webhook_transform(&transform, br#"{"event":"x"}"#)
+            .await
+            .unwrap();
+        assert!(output.is_none());
+    }
+
+    #[tokio::test]
+    async fn run_webhook_transform_converts_payload_to_webhook_body() {
+        let transform = crate::config::schema::WebhookTransformConfig {
+            path: "/hooks/convert".to_string(),
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "cat >/dev/null; printf '{\"message\":\"from transform\",\"session_id\":\"s1\"}'"
+                    .to_string(),
+            ],
+            timeout_ms: 2000,
+            max_output_bytes: 1024,
+        };
+
+        let output = run_webhook_transform(&transform, br#"{"event":"x"}"#)
+            .await
+            .unwrap()
+            .expect("expected transformed webhook body");
+        assert_eq!(output.message, "from transform");
+        assert_eq!(output.session_id.as_deref(), Some("s1"));
+        assert_eq!(output.stream, None);
+    }
+
+    #[tokio::test]
+    async fn run_webhook_transform_rejects_non_zero_exit() {
+        let transform = crate::config::schema::WebhookTransformConfig {
+            path: "/hooks/error".to_string(),
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "cat >/dev/null; echo boom >&2; exit 7".to_string(),
+            ],
+            timeout_ms: 2000,
+            max_output_bytes: 1024,
+        };
+
+        let err = match run_webhook_transform(&transform, br#"{"event":"x"}"#).await {
+            Ok(_) => panic!("expected transform failure"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("exited with status"));
     }
 
     #[test]

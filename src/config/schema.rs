@@ -5071,6 +5071,89 @@ pub struct WebhookConfig {
     pub port: u16,
     /// Optional shared secret for webhook signature verification.
     pub secret: Option<String>,
+    /// Path-scoped payload transforms for generic webhook senders.
+    ///
+    /// Each transform route is matched by exact normalized path and executes
+    /// one command with the raw request body piped to stdin.
+    #[serde(default)]
+    pub transforms: Vec<WebhookTransformConfig>,
+}
+
+/// One inbound webhook transform route.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WebhookTransformConfig {
+    /// Exact path to match (for example `/hooks/github`).
+    pub path: String,
+    /// Command argv to execute; first element is executable path.
+    pub command: Vec<String>,
+    /// Max transform runtime in milliseconds.
+    #[serde(default = "default_webhook_transform_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Max stdout bytes accepted from transform output.
+    #[serde(default = "default_webhook_transform_max_output_bytes")]
+    pub max_output_bytes: usize,
+}
+
+fn default_webhook_transform_timeout_ms() -> u64 {
+    5_000
+}
+
+fn default_webhook_transform_max_output_bytes() -> usize {
+    65_536
+}
+
+pub(crate) fn normalize_webhook_transform_path(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut normalized = if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    };
+
+    while normalized.contains("//") {
+        normalized = normalized.replace("//", "/");
+    }
+
+    if normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+
+    if normalized.is_empty()
+        || !normalized.starts_with('/')
+        || normalized
+            .chars()
+            .any(|ch| ch.is_control() || ch == '?' || ch == '#')
+    {
+        return None;
+    }
+
+    Some(normalized)
+}
+
+fn is_reserved_gateway_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/health"
+            | "/metrics"
+            | "/pair"
+            | "/webhook"
+            | "/whatsapp"
+            | "/linq"
+            | "/github"
+            | "/bluebubbles"
+            | "/wati"
+            | "/nextcloud-talk"
+            | "/qq"
+            | "/api/chat"
+            | "/v1/models"
+            | "/v1/chat/completions"
+            | "/ws/chat"
+    ) || path.starts_with("/api/")
+        || path.starts_with("/_app/")
 }
 
 impl ChannelConfig for WebhookConfig {
@@ -7880,6 +7963,55 @@ impl Config {
         // Gateway
         if self.gateway.host.trim().is_empty() {
             anyhow::bail!("gateway.host must not be empty");
+        }
+        if let Some(webhook) = &self.channels_config.webhook {
+            let mut seen_paths = std::collections::HashSet::new();
+            for (i, transform) in webhook.transforms.iter().enumerate() {
+                let Some(normalized_path) = normalize_webhook_transform_path(&transform.path)
+                else {
+                    anyhow::bail!(
+                        "channels_config.webhook.transforms[{i}].path is invalid; expected an absolute URL path without query/fragment"
+                    );
+                };
+                if is_reserved_gateway_path(&normalized_path) {
+                    anyhow::bail!(
+                        "channels_config.webhook.transforms[{i}].path conflicts with a reserved gateway route: {normalized_path}"
+                    );
+                }
+                if !seen_paths.insert(normalized_path.clone()) {
+                    anyhow::bail!(
+                        "channels_config.webhook.transforms contains duplicate path after normalization: {normalized_path}"
+                    );
+                }
+                if transform.command.is_empty() {
+                    anyhow::bail!(
+                        "channels_config.webhook.transforms[{i}].command must include at least one argv element"
+                    );
+                }
+                for (j, arg) in transform.command.iter().enumerate() {
+                    let trimmed = arg.trim();
+                    if trimmed.is_empty() {
+                        anyhow::bail!(
+                            "channels_config.webhook.transforms[{i}].command[{j}] must not be empty"
+                        );
+                    }
+                    if trimmed.contains('\0') {
+                        anyhow::bail!(
+                            "channels_config.webhook.transforms[{i}].command[{j}] must not contain null bytes"
+                        );
+                    }
+                }
+                if transform.timeout_ms == 0 || transform.timeout_ms > 300_000 {
+                    anyhow::bail!(
+                        "channels_config.webhook.transforms[{i}].timeout_ms must be between 1 and 300000"
+                    );
+                }
+                if transform.max_output_bytes == 0 || transform.max_output_bytes > 1_048_576 {
+                    anyhow::bail!(
+                        "channels_config.webhook.transforms[{i}].max_output_bytes must be between 1 and 1048576"
+                    );
+                }
+            }
         }
 
         // Autonomy
@@ -11276,6 +11408,7 @@ channel_id = "C123"
         let json = r#"{"port":8080,"secret":"my-secret-key"}"#;
         let parsed: WebhookConfig = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.secret.as_deref(), Some("my-secret-key"));
+        assert!(parsed.transforms.is_empty());
     }
 
     #[test]
@@ -11284,6 +11417,104 @@ channel_id = "C123"
         let parsed: WebhookConfig = serde_json::from_str(json).unwrap();
         assert!(parsed.secret.is_none());
         assert_eq!(parsed.port, 8080);
+        assert!(parsed.transforms.is_empty());
+    }
+
+    #[test]
+    async fn webhook_config_with_transform_routes() {
+        let json = r#"{
+            "port":8080,
+            "secret":"my-secret-key",
+            "transforms":[
+                {"path":"hooks/github","command":["sh","-c","cat"],"timeout_ms":3000,"max_output_bytes":1024}
+            ]
+        }"#;
+        let parsed: WebhookConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.transforms.len(), 1);
+        assert_eq!(parsed.transforms[0].path, "hooks/github");
+        assert_eq!(parsed.transforms[0].command[0], "sh");
+        assert_eq!(parsed.transforms[0].timeout_ms, 3000);
+    }
+
+    #[test]
+    async fn normalize_webhook_transform_path_handles_common_inputs() {
+        assert_eq!(
+            normalize_webhook_transform_path("/hooks/github/"),
+            Some("/hooks/github".to_string())
+        );
+        assert_eq!(
+            normalize_webhook_transform_path("hooks//github"),
+            Some("/hooks/github".to_string())
+        );
+        assert_eq!(normalize_webhook_transform_path(""), None);
+        assert_eq!(normalize_webhook_transform_path("/hooks/github?x=1"), None);
+    }
+
+    #[test]
+    async fn config_validate_rejects_duplicate_webhook_transform_paths() {
+        let mut config = Config::default();
+        config.channels_config.webhook = Some(WebhookConfig {
+            port: 8080,
+            secret: None,
+            transforms: vec![
+                WebhookTransformConfig {
+                    path: "/hooks/github".to_string(),
+                    command: vec!["sh".to_string(), "-c".to_string(), "cat".to_string()],
+                    timeout_ms: 1000,
+                    max_output_bytes: 1024,
+                },
+                WebhookTransformConfig {
+                    path: "hooks//github".to_string(),
+                    command: vec!["sh".to_string(), "-c".to_string(), "cat".to_string()],
+                    timeout_ms: 1000,
+                    max_output_bytes: 1024,
+                },
+            ],
+        });
+
+        let err = config
+            .validate()
+            .expect_err("expected duplicate webhook transform path validation failure");
+        assert!(err.to_string().contains("duplicate path"));
+    }
+
+    #[test]
+    async fn config_validate_rejects_reserved_webhook_transform_path() {
+        let mut config = Config::default();
+        config.channels_config.webhook = Some(WebhookConfig {
+            port: 8080,
+            secret: None,
+            transforms: vec![WebhookTransformConfig {
+                path: "/api/chat".to_string(),
+                command: vec!["sh".to_string(), "-c".to_string(), "cat".to_string()],
+                timeout_ms: 1000,
+                max_output_bytes: 1024,
+            }],
+        });
+
+        let err = config
+            .validate()
+            .expect_err("expected reserved webhook transform path failure");
+        assert!(err.to_string().contains("reserved gateway route"));
+    }
+
+    #[test]
+    async fn config_validate_accepts_valid_webhook_transform_path() {
+        let mut config = Config::default();
+        config.channels_config.webhook = Some(WebhookConfig {
+            port: 8080,
+            secret: None,
+            transforms: vec![WebhookTransformConfig {
+                path: "/hooks/github".to_string(),
+                command: vec!["sh".to_string(), "-c".to_string(), "cat".to_string()],
+                timeout_ms: 1000,
+                max_output_bytes: 1024,
+            }],
+        });
+
+        config
+            .validate()
+            .expect("valid webhook transform config should pass");
     }
 
     // ── WhatsApp config ──────────────────────────────────────

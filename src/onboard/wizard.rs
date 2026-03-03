@@ -5472,6 +5472,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     } else {
                         Some(secret)
                     },
+                    transforms: Vec::new(),
                 });
                 println!(
                     "  {} Webhook on port {}",
