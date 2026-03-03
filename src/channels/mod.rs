@@ -3960,6 +3960,19 @@ or tune thresholds in config.",
                     "I blocked part of my draft response because it appeared to contain credential material. Please ask me to provide a redacted summary.".to_string()
                 }
             };
+            // Suppress NO_REPLY / HEARTBEAT_OK sentinels that leak from
+            // agent prompt instructions into channel replies.
+            if crate::cron::scheduler::is_no_reply_sentinel(&delivered_response)
+                || crate::daemon::is_heartbeat_ok_sentinel(&delivered_response)
+            {
+                tracing::debug!(
+                    channel = %msg.channel,
+                    sender = %msg.sender,
+                    "Suppressed sentinel reply in channel conversation"
+                );
+                return;
+            }
+
             runtime_trace::record_event(
                 "channel_message_outbound",
                 Some(msg.channel.as_str()),
