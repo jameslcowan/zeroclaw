@@ -383,11 +383,26 @@ jobs:
                   if-no-files-found: ignore
                   retention-days: 21
 
-            - name: Upload Trivy SARIF
+            - name: Detect Trivy SARIF report
               if: always()
+              id: trivy_sarif
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  sarif_path="artifacts/trivy-${{ steps.meta.outputs.release_tag }}.sarif"
+                  if [ -f "${sarif_path}" ]; then
+                    echo "present=true" >> "$GITHUB_OUTPUT"
+                    echo "sarif_path=${sarif_path}" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "present=false" >> "$GITHUB_OUTPUT"
+                    echo "::warning::Trivy SARIF not found at ${sarif_path}; skipping SARIF upload."
+                  fi
+
+            - name: Upload Trivy SARIF
+              if: always() && steps.trivy_sarif.outputs.present == 'true'
               uses: github/codeql-action/upload-sarif@89a39a4e59826350b863aa6b6252a07ad50cf83e # v4
               with:
-                  sarif_file: artifacts/trivy-${{ steps.meta.outputs.release_tag }}.sarif
+                  sarif_file: ${{ steps.trivy_sarif.outputs.sarif_path }}
                   category: ghcr-trivy
 
             - name: Upload Trivy report artifacts
