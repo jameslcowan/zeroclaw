@@ -20,6 +20,11 @@ on:
                 required: false
                 default: ""
                 type: string
+            skip_ghcr_tag_check:
+                description: "Bypass GHCR tag availability check (temporary emergency use only)"
+                required: false
+                default: false
+                type: boolean
             draft:
                 description: "Create release as draft (manual publish only)"
                 required: false
@@ -52,6 +57,7 @@ jobs:
             release_ref: ${{ steps.vars.outputs.release_ref }}
             release_tag: ${{ steps.vars.outputs.release_tag }}
             publish_release: ${{ steps.vars.outputs.publish_release }}
+            skip_ghcr_tag_check: ${{ steps.vars.outputs.skip_ghcr_tag_check }}
             draft_release: ${{ steps.vars.outputs.draft_release }}
         steps:
             - name: Resolve release inputs
@@ -63,6 +69,7 @@ jobs:
                   event_name="${GITHUB_EVENT_NAME}"
                   publish_release="false"
                   draft_release="false"
+                  skip_ghcr_tag_check="false"
 
                   if [[ "$event_name" == "push" ]]; then
                     release_ref="${GITHUB_REF_NAME}"
@@ -72,6 +79,7 @@ jobs:
                     release_ref="${{ inputs.release_ref }}"
                     publish_release="${{ inputs.publish_release }}"
                     draft_release="${{ inputs.draft }}"
+                    skip_ghcr_tag_check="${{ inputs.skip_ghcr_tag_check }}"
 
                     if [[ "$publish_release" == "true" ]]; then
                       release_tag="${{ inputs.release_tag }}"
@@ -93,6 +101,7 @@ jobs:
                     echo "release_ref=${release_ref}"
                     echo "release_tag=${release_tag}"
                     echo "publish_release=${publish_release}"
+                    echo "skip_ghcr_tag_check=${skip_ghcr_tag_check}"
                     echo "draft_release=${draft_release}"
                   } >> "$GITHUB_OUTPUT"
 
@@ -102,6 +111,7 @@ jobs:
                     echo "- release_ref: ${release_ref}"
                     echo "- release_tag: ${release_tag}"
                     echo "- publish_release: ${publish_release}"
+                    echo "- skip_ghcr_tag_check: ${skip_ghcr_tag_check}"
                     echo "- draft_release: ${draft_release}"
                   } >> "$GITHUB_STEP_SUMMARY"
 
@@ -669,6 +679,7 @@ jobs:
                   cat artifacts/release-notes-supply-chain.md >> "$GITHUB_STEP_SUMMARY"
 
             - name: Verify GHCR release tag availability
+              if: needs.prepare.outputs.skip_ghcr_tag_check != 'true'
               shell: bash
               env:
                   RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
@@ -707,6 +718,16 @@ jobs:
                   echo "::error::GHCR tag ${repo}:${RELEASE_TAG} was not available before release publish timeout."
                   cat /tmp/ghcr-release-manifest.json || true
                   exit 1
+
+            - name: Publish GHCR check bypass warning
+              if: needs.prepare.outputs.skip_ghcr_tag_check == 'true'
+              shell: bash
+              run: |
+                  {
+                    echo "### GHCR Tag Check Bypassed"
+                    echo "- skip_ghcr_tag_check=true"
+                    echo "- Release publish proceeded without verifying GHCR tag availability."
+                  } >> "$GITHUB_STEP_SUMMARY"
 
             - name: Create GitHub Release
               uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
