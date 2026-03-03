@@ -258,6 +258,40 @@ mod tests {
         assert!(registry.len() >= 2);
     }
 
+    /// With the `hardware` feature, exactly 6 built-in tools must be present:
+    /// gpio_read, gpio_write, pico_flash, device_read_code, device_write_code, device_exec.
+    #[cfg(feature = "hardware")]
+    #[tokio::test]
+    async fn hardware_feature_registers_all_six_tools() {
+        let devices = empty_device_registry();
+        let registry = ToolRegistry::load(devices).await.expect("load failed");
+
+        let names = registry.list();
+        let expected = [
+            "device_exec",
+            "device_read_code",
+            "device_write_code",
+            "gpio_read",
+            "gpio_write",
+            "pico_flash",
+        ];
+        for tool_name in &expected {
+            assert!(
+                names.contains(tool_name),
+                "expected tool '{}' missing; got: {:?}",
+                tool_name,
+                names
+            );
+        }
+        assert_eq!(
+            registry.len(),
+            6,
+            "expected exactly 6 built-in tools, got {} (names: {:?})",
+            registry.len(),
+            names
+        );
+    }
+
     #[tokio::test]
     async fn schemas_returns_valid_json_schema_array() {
         let devices = empty_device_registry();
