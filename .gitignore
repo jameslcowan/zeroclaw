@@ -33,3 +33,4 @@ venv/
 *.pem
 credentials.json
 .worktrees/
+ZEROCLAW_CONTEXT.md
