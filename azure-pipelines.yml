@@ -1,0 +1,192 @@
+# CI — runs on every push to main and every pull request.
+# Jobs: lint, test (Linux/Windows/macOS), docker smoke, security.
+# Compute: Azure DevOps. Distribution: GitHub (code stays on GitHub).
+#
+# Prerequisites in Azure DevOps:
+#   - Pipeline connected to this GitHub repo via a GitHub service connection
+#   - No secrets required for CI (all steps are read-only)
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: "1.92.0"
+
+stages:
+  - stage: CI
+    displayName: CI
+    jobs:
+
+      # ── Lint ────────────────────────────────────────────────────────────────
+      # Format check + Clippy with -D warnings. Linux only — output is
+      # platform-independent.
+      - job: Lint
+        displayName: Lint
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 20
+        steps:
+          - checkout: self
+
+          - script: |
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --default-toolchain none --no-modify-path
+              echo "##vso[task.prependpath]$HOME/.cargo/bin"
+              rustup toolchain install $(RUST_VERSION) --profile minimal \
+                --component rustfmt clippy
+            displayName: Install Rust $(RUST_VERSION)
+
+          - task: Cache@2
+            displayName: Cache Rust dependencies
+            inputs:
+              key: '"rust-lint" | "$(Agent.OS)" | Cargo.lock'
+              restoreKeys: |
+                "rust-lint" | "$(Agent.OS)"
+              path: |
+                $(HOME)/.cargo/registry
+                $(HOME)/.cargo/git
+                target
+
+          - script: cargo fmt --all -- --check
+            displayName: Check formatting
+
+          - script: cargo clippy --locked --all-targets -- -D warnings
+            displayName: Clippy (deny all warnings)
+
+      # ── Test ────────────────────────────────────────────────────────────────
+      # Full test suite on Linux, Windows, and macOS in parallel.
+      - job: Test
+        displayName: "Test"
+        timeoutInMinutes: 30
+        strategy:
+          matrix:
+            Linux:
+              vmImage: ubuntu-latest
+            Windows:
+              vmImage: windows-latest
+            macOS:
+              vmImage: macos-latest
+        pool:
+          vmImage: $(vmImage)
+        steps:
+          - checkout: self
+
+          # Unix: install via rustup shell script
+          - script: |
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --default-toolchain none --no-modify-path
+              echo "##vso[task.prependpath]$HOME/.cargo/bin"
+              rustup toolchain install $(RUST_VERSION) --profile minimal
+            displayName: Install Rust $(RUST_VERSION) (Unix)
+            condition: ne(variables['Agent.OS'], 'Windows_NT')
+
+          # Windows: download rustup-init.exe
+          - script: |
+              curl --proto '=https' --tlsv1.2 -sSf https://win.rustup.rs/x86_64 -o rustup-init.exe
+              .\rustup-init.exe -y --default-toolchain $(RUST_VERSION) --no-modify-path
+              echo ##vso[task.prependpath]%USERPROFILE%\.cargo\bin
+            displayName: Install Rust $(RUST_VERSION) (Windows)
+            condition: eq(variables['Agent.OS'], 'Windows_NT')
+
+          - task: Cache@2
+            displayName: Cache Rust dependencies (Unix)
+            inputs:
+              key: '"rust-test" | "$(Agent.OS)" | Cargo.lock'
+              restoreKeys: |
+                "rust-test" | "$(Agent.OS)"
+              path: |
+                $(HOME)/.cargo/registry
+                $(HOME)/.cargo/git
+                target
+            condition: ne(variables['Agent.OS'], 'Windows_NT')
+
+          - task: Cache@2
+            displayName: Cache Rust dependencies (Windows)
+            inputs:
+              key: '"rust-test" | "$(Agent.OS)" | Cargo.lock'
+              restoreKeys: |
+                "rust-test" | "$(Agent.OS)"
+              path: |
+                $(USERPROFILE)\.cargo\registry
+                $(USERPROFILE)\.cargo\git
+                target
+            condition: eq(variables['Agent.OS'], 'Windows_NT')
+
+          - script: cargo test --locked --verbose
+            displayName: Run tests
+
+      # ── Docker Smoke ────────────────────────────────────────────────────────
+      # Builds the "dev" stage of the Dockerfile and boots the binary.
+      - job: Docker
+        displayName: Docker (smoke)
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 25
+        steps:
+          - checkout: self
+
+          - script: docker build --target dev --tag zeroclaw-ci-smoke:latest .
+            displayName: Build dev stage
+
+          - script: docker run --rm zeroclaw-ci-smoke:latest --version
+            displayName: Smoke test — verify binary starts
+
+      # ── Security ────────────────────────────────────────────────────────────
+      # cargo audit: known CVEs in Cargo.lock
+      # cargo deny: license allowlist + supply chain policy
+      - job: Security
+        displayName: Security
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 20
+        steps:
+          - checkout: self
+
+          - script: |
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --default-toolchain none --no-modify-path
+              echo "##vso[task.prependpath]$HOME/.cargo/bin"
+              rustup toolchain install $(RUST_VERSION) --profile minimal
+            displayName: Install Rust $(RUST_VERSION)
+
+          - task: Cache@2
+            displayName: Cache Rust dependencies
+            inputs:
+              key: '"rust-security" | "$(Agent.OS)" | Cargo.lock'
+              restoreKeys: |
+                "rust-security" | "$(Agent.OS)"
+              path: |
+                $(HOME)/.cargo/registry
+                $(HOME)/.cargo/git
+                target
+
+          # Cache cargo-audit and cargo-deny binaries so they don't recompile
+          # every run. Key includes tool versions to invalidate when bumping.
+          - task: Cache@2
+            displayName: Cache security tool binaries
+            inputs:
+              key: '"security-tools-v1" | "$(Agent.OS)"'
+              path: $(HOME)/.cargo/bin
+            continueOnError: true
+
+          - script: |
+              command -v cargo-audit || cargo install cargo-audit --locked
+            displayName: Install cargo-audit
+
+          - script: cargo audit
+            displayName: cargo audit (CVE scan)
+
+          - script: |
+              command -v cargo-deny || cargo install cargo-deny --locked
+            displayName: Install cargo-deny
+
+          - script: cargo deny check advisories licenses sources
+            displayName: cargo deny (license + supply chain)

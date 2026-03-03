@@ -1,0 +1,292 @@
+# Release — triggered by a v* tag push (e.g. v0.2.0).
+# Jobs: build binaries (matrix), docker push to ghcr.io, publish GitHub Release.
+# Compute: Azure DevOps. Distribution: GitHub Releases + ghcr.io.
+#
+# Prerequisites in Azure DevOps:
+#   Variable group "release-secrets" containing:
+#     GITHUB_TOKEN        — GitHub PAT with repo + packages write scope
+#                           (for ghcr.io push and GitHub Release creation)
+#
+# One-time setup:
+#   1. Create the "release-secrets" variable group in Azure DevOps
+#      (Pipelines → Library → + Variable group), mark GITHUB_TOKEN as secret
+#   2. Connect this pipeline to the GitHub repo via a GitHub service connection
+#   3. In branch policies, allow this pipeline to trigger on tags
+
+trigger:
+  tags:
+    include:
+      - v*
+  branches:
+    exclude:
+      - "*"
+
+pr: none
+
+variables:
+  - group: release-secrets
+  - name: CARGO_TERM_COLOR
+    value: always
+  - name: RUST_VERSION
+    value: "1.92.0"
+  - name: REGISTRY
+    value: ghcr.io
+  # Set IMAGE_NAME to your GitHub org/repo, e.g. myorg/zeroclaw
+  - name: IMAGE_NAME
+    value: $(Build.Repository.Name)
+
+stages:
+  # ── Stage 1: Build Release Binaries ────────────────────────────────────────
+  # Compiles a stripped release binary for each target platform in parallel.
+  # Artifacts are published and downloaded by the Publish stage.
+  - stage: Build
+    displayName: Build
+    jobs:
+      - job: BuildBinary
+        displayName: "Build"
+        timeoutInMinutes: 45
+        strategy:
+          matrix:
+            linux_x64:
+              vmImage: ubuntu-latest
+              target: x86_64-unknown-linux-musl
+              binaryName: zeroclaw
+              archiveExt: tar.gz
+            linux_arm64:
+              vmImage: ubuntu-latest
+              target: aarch64-unknown-linux-musl
+              binaryName: zeroclaw
+              archiveExt: tar.gz
+            macos_arm64:
+              vmImage: macos-latest
+              target: aarch64-apple-darwin
+              binaryName: zeroclaw
+              archiveExt: tar.gz
+            macos_x64:
+              vmImage: macos-latest
+              target: x86_64-apple-darwin
+              binaryName: zeroclaw
+              archiveExt: tar.gz
+        pool:
+          vmImage: $(vmImage)
+        steps:
+          - checkout: self
+
+          - script: |
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --default-toolchain none --no-modify-path
+              echo "##vso[task.prependpath]$HOME/.cargo/bin"
+              rustup toolchain install $(RUST_VERSION) --profile minimal \
+                --target $(target)
+            displayName: Install Rust $(RUST_VERSION) + target
+
+          # musl targets need the musl cross-linker on Linux.
+          - script: |
+              sudo apt-get update -qq
+              sudo apt-get install -y musl-tools
+              # aarch64-musl cross-linker
+              sudo apt-get install -y gcc-aarch64-linux-gnu
+            displayName: Install musl cross-compile tools
+            condition: eq(variables['vmImage'], 'ubuntu-latest')
+
+          - task: Cache@2
+            displayName: Cache Rust dependencies
+            inputs:
+              key: '"rust-release" | "$(target)" | Cargo.lock'
+              restoreKeys: |
+                "rust-release" | "$(target)"
+              path: |
+                $(HOME)/.cargo/registry
+                $(HOME)/.cargo/git
+                target
+
+          - script: cargo build --release --locked --target $(target)
+            displayName: Build release binary
+            env:
+              # Required for aarch64-unknown-linux-musl cross-compilation
+              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+              CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
+
+          # Warn at 5 MB, hard fail at 15 MB.
+          - script: |
+              BIN="target/$(target)/release/$(binaryName)"
+              SIZE=$(stat -f%z "$BIN" 2>/dev/null || stat -c%s "$BIN")
+              SIZE_MB=$((SIZE / 1024 / 1024))
+              echo "Binary size: ${SIZE_MB} MB ($SIZE bytes)"
+              if [ "$SIZE" -gt 15728640 ]; then
+                echo "##vso[task.logissue type=error]Binary exceeds 15 MB hard limit (${SIZE_MB} MB)"
+                exit 1
+              elif [ "$SIZE" -gt 5242880 ]; then
+                echo "##vso[task.logissue type=warning]Binary exceeds 5 MB size target (${SIZE_MB} MB)"
+              fi
+            displayName: Check binary size
+
+          - script: |
+              cd target/$(target)/release
+              tar czf $(Build.ArtifactStagingDirectory)/zeroclaw-$(target).tar.gz $(binaryName)
+            displayName: Package binary
+
+          - task: PublishPipelineArtifact@1
+            displayName: Upload artifact
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/zeroclaw-$(target).tar.gz
+              artifactName: zeroclaw-$(target)
+
+  # ── Stage 2: Docker Release Image ──────────────────────────────────────────
+  # Builds a multi-arch (amd64 + arm64) image using pre-built binaries from
+  # the Build stage. No Rust compilation inside Docker — runs in ~3-5 min.
+  # Pushes to ghcr.io using GITHUB_TOKEN from the release-secrets variable group.
+  - stage: Docker
+    displayName: Docker
+    dependsOn: Build
+    jobs:
+      - job: DockerPush
+        displayName: Build and push multi-arch image
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 20
+        steps:
+          - checkout: self
+
+          # Download the two Linux binaries to use in the Docker build context.
+          - task: DownloadPipelineArtifact@2
+            displayName: Download linux x64 binary
+            inputs:
+              artifactName: zeroclaw-x86_64-unknown-linux-musl
+              targetPath: $(Build.SourcesDirectory)/docker-context/amd64
+
+          - task: DownloadPipelineArtifact@2
+            displayName: Download linux arm64 binary
+            inputs:
+              artifactName: zeroclaw-aarch64-unknown-linux-musl
+              targetPath: $(Build.SourcesDirectory)/docker-context/arm64
+
+          - script: |
+              cd docker-context/amd64 && tar xzf zeroclaw-x86_64-unknown-linux-musl.tar.gz
+              cd ../arm64 && tar xzf zeroclaw-aarch64-unknown-linux-musl.tar.gz
+            displayName: Unpack binaries
+            workingDirectory: $(Build.SourcesDirectory)
+
+          # Compute tags: semver (e.g. 0.2.0), major.minor (e.g. 0.2), sha, latest
+          - script: |
+              TAG=$(Build.SourceBranchName)            # e.g. v0.2.0
+              VERSION=${TAG#v}                          # e.g. 0.2.0
+              MAJOR_MINOR=$(echo $VERSION | cut -d. -f1-2)  # e.g. 0.2
+              SHORT_SHA=$(echo $(Build.SourceVersion) | cut -c1-12)
+              IMAGE=$(REGISTRY)/$(IMAGE_NAME)
+
+              TAGS="${IMAGE}:${VERSION} ${IMAGE}:${MAJOR_MINOR} ${IMAGE}:sha-${SHORT_SHA} ${IMAGE}:latest"
+              echo "##vso[task.setvariable variable=IMAGE_TAGS]$TAGS"
+              echo "Tags: $TAGS"
+            displayName: Compute image tags
+
+          - script: |
+              echo "$(GITHUB_TOKEN)" | docker login $(REGISTRY) -u $(Build.RequestedForEmail) --password-stdin
+            displayName: Log in to ghcr.io
+            env:
+              GITHUB_TOKEN: $(GITHUB_TOKEN)
+
+          - script: docker run --privileged --rm tonistiigi/binfmt --install all
+            displayName: Set up QEMU (multi-arch emulation)
+
+          - script: docker buildx create --use --name multiarch-builder
+            displayName: Set up Docker Buildx
+
+          # Build using Dockerfile.release which COPYs the pre-built binaries.
+          # No Rust compilation — build time ~3-5 min instead of ~90 min.
+          - script: |
+              TAGS_ARG=""
+              for tag in $(IMAGE_TAGS); do
+                TAGS_ARG="$TAGS_ARG --tag $tag"
+              done
+
+              docker buildx build \
+                --file Dockerfile.release \
+                --platform linux/amd64,linux/arm64 \
+                $TAGS_ARG \
+                --push \
+                .
+            displayName: Build and push multi-arch image
+            workingDirectory: $(Build.SourcesDirectory)
+
+  # ── Stage 3: Publish GitHub Release ────────────────────────────────────────
+  # Downloads all build artifacts, generates SBOM + checksums, signs with
+  # cosign keyless, and creates the GitHub Release.
+  - stage: Publish
+    displayName: Publish
+    dependsOn:
+      - Build
+      - Docker
+    jobs:
+      - job: PublishRelease
+        displayName: Publish GitHub Release
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 20
+        steps:
+          - checkout: self
+
+          - task: DownloadPipelineArtifact@2
+            displayName: Download all build artifacts
+            inputs:
+              path: $(Build.ArtifactStagingDirectory)/artifacts
+
+          # Flatten the nested per-artifact directories.
+          - script: |
+              find artifacts -mindepth 2 -maxdepth 2 -type f -exec mv {} artifacts/ \;
+              find artifacts -mindepth 1 -maxdepth 1 -type d -exec rmdir {} +
+              ls -lh artifacts/
+            displayName: Flatten artifact directories
+            workingDirectory: $(Build.ArtifactStagingDirectory)
+
+          # syft: Software Bill of Materials in CycloneDX and SPDX formats.
+          - script: |
+              curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+                | sh -s -- -b /usr/local/bin
+            displayName: Install syft
+
+          - script: |
+              syft dir:. --source-name zeroclaw \
+                -o cyclonedx-json=$(Build.ArtifactStagingDirectory)/artifacts/zeroclaw.cdx.json \
+                -o spdx-json=$(Build.ArtifactStagingDirectory)/artifacts/zeroclaw.spdx.json
+            displayName: Generate SBOM (CycloneDX + SPDX)
+
+          - script: |
+              cd $(Build.ArtifactStagingDirectory)/artifacts
+              sha256sum *.tar.gz *.json > SHA256SUMS
+              cat SHA256SUMS
+            displayName: Generate SHA256 checksums
+
+          # cosign keyless signing using Azure DevOps OIDC.
+          - script: |
+              curl -sSfL https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 \
+                -o /usr/local/bin/cosign
+              chmod +x /usr/local/bin/cosign
+            displayName: Install cosign
+
+          - script: |
+              cd $(Build.ArtifactStagingDirectory)/artifacts
+              for file in *; do
+                [ -f "$file" ] || continue
+                cosign sign-blob --yes \
+                  --output-signature="${file}.sig" \
+                  --output-certificate="${file}.pem" \
+                  "$file"
+              done
+            displayName: Sign all release artifacts (cosign keyless)
+
+          # Create the GitHub Release with all artifacts attached.
+          # Uses the GitHubRelease task — requires a GitHub service connection
+          # configured in Azure DevOps (Project Settings → Service connections).
+          - task: GitHubRelease@1
+            displayName: Create GitHub Release
+            inputs:
+              gitHubConnection: github-service-connection
+              repositoryName: $(Build.Repository.Name)
+              action: create
+              target: $(Build.SourceVersion)
+              tagSource: gitTag
+              title: $(Build.SourceBranchName)
+              releaseNotesSource: githubReleaseNotes
+              assets: $(Build.ArtifactStagingDirectory)/artifacts/*
+              addChangeLog: true

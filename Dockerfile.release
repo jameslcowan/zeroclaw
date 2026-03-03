@@ -1,0 +1,22 @@
+# Dockerfile.release — packages pre-built binaries into a minimal release image.
+# Used by azure-pipelines-release.yml. Does NOT compile Rust.
+# The build pipeline compiles the binaries and places them in docker-context/:
+#   docker-context/amd64/zeroclaw  (x86_64-unknown-linux-musl)
+#   docker-context/arm64/zeroclaw  (aarch64-unknown-linux-musl)
+#
+# Build command (handled by the pipeline):
+#   docker buildx build --file Dockerfile.release \
+#     --platform linux/amd64,linux/arm64 \
+#     --tag ghcr.io/org/zeroclaw:latest \
+#     --push .
+
+FROM gcr.io/distroless/cc-debian13:nonroot
+
+# TARGETARCH is set automatically by buildx: "amd64" or "arm64"
+ARG TARGETARCH
+
+COPY docker-context/${TARGETARCH}/zeroclaw /usr/local/bin/zeroclaw
+
+EXPOSE 3000
+USER 65534
+ENTRYPOINT ["/usr/local/bin/zeroclaw"]
