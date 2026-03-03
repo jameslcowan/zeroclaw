@@ -110,9 +110,8 @@ impl Transport for HardwareSerialTransport {
             )));
         }
 
-        let json = serde_json::to_string(cmd).map_err(|e| {
-            TransportError::Protocol(format!("failed to serialize command: {e}"))
-        })?;
+        let json = serde_json::to_string(cmd)
+            .map_err(|e| TransportError::Protocol(format!("failed to serialize command: {e}")))?;
         // Log command name only — never log the full payload (may contain large or sensitive data).
         tracing::info!(port = %self.port_path, cmd = %cmd.cmd, "serial send");
 
@@ -138,11 +137,7 @@ impl Transport for HardwareSerialTransport {
 ///
 /// This is the inner function wrapped with `tokio::time::timeout` by the caller.
 /// Do NOT add a timeout here — the outer caller owns the deadline.
-async fn do_send(
-    path: &str,
-    baud: u32,
-    json: &str,
-) -> Result<ZcResponse, TransportError> {
+async fn do_send(path: &str, baud: u32, json: &str) -> Result<ZcResponse, TransportError> {
     // Open port lazily — released when this function returns
     let mut port = tokio_serial::new(path, baud)
         .open_native_async()
@@ -150,9 +145,7 @@ async fn do_send(
             // Match on the error kind for robust cross-platform disconnect detection.
             match e.kind {
                 tokio_serial::ErrorKind::NoDevice => TransportError::Disconnected,
-                tokio_serial::ErrorKind::Io(io_kind)
-                    if io_kind == std::io::ErrorKind::NotFound =>
-                {
+                tokio_serial::ErrorKind::Io(io_kind) if io_kind == std::io::ErrorKind::NotFound => {
                     TransportError::Disconnected
                 }
                 _ => TransportError::Other(format!("failed to open {path}: {e}")),

@@ -39,15 +39,25 @@ pub mod manifest;
 pub mod subprocess;
 pub mod tool_registry;
 
-pub use device::{Device, DeviceCapabilities, DeviceContext, DeviceKind, DeviceRegistry, DeviceRuntime, NO_HW_DEVICES_SUMMARY};
+#[allow(unused_imports)]
+pub use device::{
+    Device, DeviceCapabilities, DeviceContext, DeviceKind, DeviceRegistry, DeviceRuntime,
+    NO_HW_DEVICES_SUMMARY,
+};
+#[allow(unused_imports)]
 pub use gpio::{gpio_tools, GpioReadTool, GpioWriteTool};
 #[cfg(feature = "hardware")]
+#[allow(unused_imports)]
 pub use pico_code::{device_code_tools, DeviceExecTool, DeviceReadCodeTool, DeviceWriteCodeTool};
+#[allow(unused_imports)]
 pub use protocol::{ZcCommand, ZcResponse};
+#[allow(unused_imports)]
 pub use tool_registry::{ToolError, ToolRegistry};
+#[allow(unused_imports)]
 pub use transport::{Transport, TransportError, TransportKind};
 
 #[cfg(feature = "hardware")]
+#[allow(unused_imports)]
 pub use serial::HardwareSerialTransport;
 
 use crate::config::Config;
@@ -105,7 +115,9 @@ pub struct HardwareBootResult {
 /// with an empty device registry (GPIO tools will report "no device found"
 /// if called, which is correct).
 #[cfg(feature = "hardware")]
-pub async fn boot(peripherals: &crate::config::PeripheralsConfig) -> anyhow::Result<HardwareBootResult> {
+pub async fn boot(
+    peripherals: &crate::config::PeripheralsConfig,
+) -> anyhow::Result<HardwareBootResult> {
     use device::DeviceCapabilities;
 
     let mut registry_inner = DeviceRegistry::discover().await;
@@ -130,17 +142,13 @@ pub async fn boot(peripherals: &crate::config::PeripheralsConfig) -> anyhow::Res
             if discovered_paths.contains(&path) {
                 continue; // already registered by USB discovery or a previous config entry
             }
-            let alias = registry_inner.register(
-                &board.board,
-                None,
-                None,
-                Some(path.clone()),
-                None,
-            );
-            let transport = std::sync::Arc::new(
-                HardwareSerialTransport::new(&path, board.baud),
-            ) as std::sync::Arc<dyn transport::Transport>;
-            let caps = DeviceCapabilities { gpio: true, ..DeviceCapabilities::default() };
+            let alias = registry_inner.register(&board.board, None, None, Some(path.clone()), None);
+            let transport = std::sync::Arc::new(HardwareSerialTransport::new(&path, board.baud))
+                as std::sync::Arc<dyn transport::Transport>;
+            let caps = DeviceCapabilities {
+                gpio: true,
+                ..DeviceCapabilities::default()
+            };
             registry_inner.attach_transport(&alias, transport, caps)
                 .unwrap_or_else(|e| tracing::warn!(alias = %alias, err = %e, "attach_transport: unexpected unknown alias"));
             // Mark path as registered so duplicate config entries are skipped.
@@ -178,10 +186,10 @@ pub async fn boot(peripherals: &crate::config::PeripheralsConfig) -> anyhow::Res
 
 /// Fallback when the `hardware` feature is disabled — plugins only.
 #[cfg(not(feature = "hardware"))]
-pub async fn boot(_peripherals: &crate::config::PeripheralsConfig) -> anyhow::Result<HardwareBootResult> {
-    let devices = std::sync::Arc::new(
-        tokio::sync::RwLock::new(DeviceRegistry::new()),
-    );
+pub async fn boot(
+    _peripherals: &crate::config::PeripheralsConfig,
+) -> anyhow::Result<HardwareBootResult> {
+    let devices = std::sync::Arc::new(tokio::sync::RwLock::new(DeviceRegistry::new()));
     let registry = ToolRegistry::load(devices.clone()).await?;
     let device_summary = {
         let reg = devices.read().await;
@@ -189,7 +197,10 @@ pub async fn boot(_peripherals: &crate::config::PeripheralsConfig) -> anyhow::Re
     };
     let tools = registry.into_tools();
     if !tools.is_empty() {
-        tracing::info!(count = tools.len(), "Hardware registry tools loaded (plugins only)");
+        tracing::info!(
+            count = tools.len(),
+            "Hardware registry tools loaded (plugins only)"
+        );
     }
     Ok(HardwareBootResult {
         tools,

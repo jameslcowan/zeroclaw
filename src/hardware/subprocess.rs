@@ -56,7 +56,10 @@ impl SubprocessTool {
     /// Build JSON Schema `properties` and `required` arrays from the manifest.
     fn build_schema_properties(
         &self,
-    ) -> (serde_json::Map<String, serde_json::Value>, Vec<serde_json::Value>) {
+    ) -> (
+        serde_json::Map<String, serde_json::Value>,
+        Vec<serde_json::Value>,
+    ) {
         let mut properties = serde_json::Map::new();
         let mut required = Vec::new();
 
@@ -230,13 +233,11 @@ impl Tool for SubprocessTool {
             // Let the process finish naturally — plugins that write their
             // result and then do cleanup should not be interrupted.
             Ok(Ok(line)) => {
-                let child_status = timeout(
-                    Duration::from_secs(PROCESS_EXIT_TIMEOUT_SECS),
-                    child.wait(),
-                )
-                .await
-                .ok()
-                .and_then(|r| r.ok());
+                let child_status =
+                    timeout(Duration::from_secs(PROCESS_EXIT_TIMEOUT_SECS), child.wait())
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok());
                 let stderr_msg = collect_stderr(stderr_handle).await;
                 let line = line.trim();
 
@@ -305,9 +306,7 @@ impl Tool for SubprocessTool {
 
 /// Collect up to 512 bytes from an optional stderr handle.
 /// Used to enrich error messages when a plugin writes nothing to stdout.
-async fn collect_stderr(
-    handle: Option<tokio::process::ChildStderr>,
-) -> String {
+async fn collect_stderr(handle: Option<tokio::process::ChildStderr>) -> String {
     use tokio::io::AsyncReadExt;
     let Some(mut stderr) = handle else {
         return String::new();
@@ -412,8 +411,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
-                .unwrap();
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
 
         let tool = SubprocessTool::new(m, script_path.clone());
@@ -442,8 +440,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
-                .unwrap();
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
 
         let m = make_manifest("sleep_tool", vec![]);

@@ -45,21 +45,15 @@ async fn resolve_device_port(
         Some(a) => a.to_string(),
         None => {
             // Auto-select the first device.
-            let all_aliases: Vec<String> = reg
-                .aliases()
-                .into_iter()
-                .map(|a| a.to_string())
-                .collect();
+            let all_aliases: Vec<String> =
+                reg.aliases().into_iter().map(|a| a.to_string()).collect();
             match all_aliases.as_slice() {
                 [single] => single.clone(),
                 [] => {
                     return Err(ToolResult {
                         success: false,
                         output: String::new(),
-                        error: Some(
-                            "no device found — is a board connected via USB?"
-                                .to_string(),
-                        ),
+                        error: Some("no device found — is a board connected via USB?".to_string()),
                     });
                 }
                 multiple => {
@@ -107,17 +101,12 @@ fn unsupported_runtime(runtime: &DeviceRuntime, tool: &str) -> ToolResult {
 }
 
 /// Run an `mpremote` command with a timeout and return (stdout, stderr).
-async fn run_mpremote(
-    args: &[&str],
-    timeout_secs: u64,
-) -> Result<(String, String), String> {
+async fn run_mpremote(args: &[&str], timeout_secs: u64) -> Result<(String, String), String> {
     use tokio::time::timeout;
 
     let result = timeout(
         std::time::Duration::from_secs(timeout_secs),
-        tokio::process::Command::new("mpremote")
-            .args(args)
-            .output(),
+        tokio::process::Command::new("mpremote").args(args).output(),
     )
     .await;
 
@@ -225,7 +214,9 @@ impl Tool for DeviceReadCodeTool {
                 if e.contains("OSError") || e.contains("no such file") || e.contains("ENOENT") {
                     Ok(ToolResult {
                         success: true,
-                        output: format!("No main.py found on {alias} — the device has no program yet."),
+                        output: format!(
+                            "No main.py found on {alias} — the device has no program yet."
+                        ),
                         error: None,
                     })
                 } else {
@@ -473,8 +464,7 @@ impl Tool for DeviceExecTool {
                 success: false,
                 output: String::new(),
                 error: Some(
-                    "code parameter is empty — provide a code snippet to execute"
-                        .to_string(),
+                    "code parameter is empty — provide a code snippet to execute".to_string(),
                 ),
             });
         }
@@ -532,11 +522,8 @@ impl Tool for DeviceExecTool {
         }
 
         // Execute via mpremote run (does NOT modify main.py).
-        let result = run_mpremote(
-            &["connect", &port, "run", &tmp_str],
-            MPREMOTE_TIMEOUT_SECS,
-        )
-        .await;
+        let result =
+            run_mpremote(&["connect", &port, "run", &tmp_str], MPREMOTE_TIMEOUT_SECS).await;
 
         // Explicit cleanup — log if removal fails rather than silently ignoring.
         if let Err(e) = named_tmp.close() {
@@ -592,9 +579,7 @@ async fn wait_for_port(
 }
 
 /// Factory function: create all Phase 7 dynamic code tools.
-pub fn device_code_tools(
-    registry: Arc<RwLock<DeviceRegistry>>,
-) -> Vec<Box<dyn Tool>> {
+pub fn device_code_tools(registry: Arc<RwLock<DeviceRegistry>>) -> Vec<Box<dyn Tool>> {
     vec![
         Box::new(DeviceReadCodeTool::new(registry.clone())),
         Box::new(DeviceWriteCodeTool::new(registry.clone())),
@@ -632,11 +617,7 @@ mod tests {
         let result = tool.execute(json!({})).await.unwrap();
         assert!(!result.success);
         assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("no device"),
+            result.error.as_deref().unwrap_or("").contains("no device"),
             "expected 'no device' error; got: {:?}",
             result.error
         );
@@ -677,13 +658,7 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("no device"),
-        );
+        assert!(result.error.as_deref().unwrap_or("").contains("no device"),);
     }
 
     // ── DeviceExecTool ───────────────────────────────────────────────
@@ -716,18 +691,9 @@ mod tests {
     #[tokio::test]
     async fn device_exec_no_device_returns_error() {
         let tool = DeviceExecTool::new(empty_registry());
-        let result = tool
-            .execute(json!({"code": "print(1+1)"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"code": "print(1+1)"})).await.unwrap();
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("no device"),
-        );
+        assert!(result.error.as_deref().unwrap_or("").contains("no device"),);
     }
 
     // ── Factory ──────────────────────────────────────────────────────

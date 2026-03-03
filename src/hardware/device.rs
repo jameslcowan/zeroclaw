@@ -339,10 +339,8 @@ impl DeviceRegistry {
                 match gpio_aliases.as_slice() {
                     [single] => single.clone(),
                     [] => {
-                        return Err(
-                            "no GPIO-capable device found; specify \"device\" parameter"
-                                .to_string(),
-                        );
+                        return Err("no GPIO-capable device found; specify \"device\" parameter"
+                            .to_string());
                     }
                     _ => {
                         return Err(format!(
@@ -451,11 +449,7 @@ impl DeviceRegistry {
                 None
             };
 
-            let board_name = info
-                .board_name
-                .as_deref()
-                .unwrap_or("unknown")
-                .to_string();
+            let board_name = info.board_name.as_deref().unwrap_or("unknown").to_string();
 
             let alias = registry.register(
                 &board_name,
@@ -503,11 +497,7 @@ impl DeviceRegistry {
     /// Pass `new_port` when the OS assigned a different path after reboot;
     /// pass `None` to reuse the device's current path.
     #[cfg(feature = "hardware")]
-    pub async fn reconnect(
-        &mut self,
-        alias: &str,
-        new_port: Option<&str>,
-    ) -> anyhow::Result<()> {
+    pub async fn reconnect(&mut self, alias: &str, new_port: Option<&str>) -> anyhow::Result<()> {
         use super::serial::{HardwareSerialTransport, DEFAULT_BAUD};
 
         let entry = self
@@ -543,9 +533,7 @@ impl DeviceRegistry {
             );
         }
 
-        entry.transport = Some(
-            Arc::new(transport) as Arc<dyn super::transport::Transport>
-        );
+        entry.transport = Some(Arc::new(transport) as Arc<dyn super::transport::Transport>);
         entry.capabilities.gpio = true;
 
         tracing::info!(alias = %alias, port = %port_path, "device reconnected");

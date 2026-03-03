@@ -80,9 +80,8 @@ impl ToolRegistry {
         // pico_flash — hardware feature only (needs UF2 assets embedded at compile time)
         #[cfg(feature = "hardware")]
         {
-            let tool: Box<dyn Tool> = Box::new(
-                super::pico_flash::PicoFlashTool::new(devices.clone()),
-            );
+            let tool: Box<dyn Tool> =
+                Box::new(super::pico_flash::PicoFlashTool::new(devices.clone()));
             let name = tool.name().to_string();
             if tools.contains_key(&name) {
                 anyhow::bail!("duplicate built-in tool name: '{}'", name);

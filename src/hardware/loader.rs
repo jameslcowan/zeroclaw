@@ -152,14 +152,20 @@ fn load_one_plugin(plugin_dir: &Path, manifest_path: &Path) -> Result<LoadedPlug
     }
 
     // Validate binary path: must exist, be a regular file, and reside within plugin_dir.
-    let canonical_plugin_dir = plugin_dir.canonicalize()
+    let canonical_plugin_dir = plugin_dir
+        .canonicalize()
         .map_err(|e| anyhow::anyhow!("cannot canonicalize plugin dir {:?}: {}", plugin_dir, e))?;
     let raw_binary_path = plugin_dir.join(&manifest.exec.binary);
     if !raw_binary_path.exists() {
         anyhow::bail!("manifest exec binary not found: {:?}", raw_binary_path);
     }
-    let binary_path = raw_binary_path.canonicalize()
-        .map_err(|e| anyhow::anyhow!("cannot canonicalize binary path {:?}: {}", raw_binary_path, e))?;
+    let binary_path = raw_binary_path.canonicalize().map_err(|e| {
+        anyhow::anyhow!(
+            "cannot canonicalize binary path {:?}: {}",
+            raw_binary_path,
+            e
+        )
+    })?;
     if !binary_path.starts_with(&canonical_plugin_dir) {
         anyhow::bail!(
             "manifest exec binary escapes plugin directory: {:?} is not under {:?}",
@@ -168,7 +174,10 @@ fn load_one_plugin(plugin_dir: &Path, manifest_path: &Path) -> Result<LoadedPlug
         );
     }
     if !binary_path.is_file() {
-        anyhow::bail!("manifest exec binary is not a regular file: {:?}", binary_path);
+        anyhow::bail!(
+            "manifest exec binary is not a regular file: {:?}",
+            binary_path
+        );
     }
 
     let name = manifest.tool.name.clone();
@@ -219,7 +228,11 @@ required    = true
 "#;
         fs::write(dir.join("tool.toml"), toml).unwrap();
         // Write a dummy binary (content doesn't matter for manifest loading).
-        fs::write(dir.join("tool.sh"), "#!/bin/sh\necho '{\"success\":true,\"output\":\"ok\",\"error\":null}'\n").unwrap();
+        fs::write(
+            dir.join("tool.sh"),
+            "#!/bin/sh\necho '{\"success\":true,\"output\":\"ok\",\"error\":null}'\n",
+        )
+        .unwrap();
     }
 
     #[test]
@@ -302,10 +315,6 @@ binary = "tool.sh"
         let path = plugin_tools_dir().expect("should resolve");
         let display = path.to_string_lossy();
         let expected = std::path::Path::new(".zeroclaw").join("tools");
-        assert!(
-            path.ends_with(&expected),
-            "unexpected path: {}",
-            display
-        );
+        assert!(path.ends_with(&expected), "unexpected path: {}", display);
     }
 }

@@ -76,19 +76,23 @@ impl Tool for GpioWriteTool {
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         let pin = match args.get("pin").and_then(|v| v.as_u64()) {
             Some(p) => p,
-            None => return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("missing required parameter: pin".to_string()),
-            }),
+            None => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("missing required parameter: pin".to_string()),
+                })
+            }
         };
         let value = match args.get("value").and_then(|v| v.as_u64()) {
             Some(v) => v,
-            None => return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("missing required parameter: value".to_string()),
-            }),
+            None => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("missing required parameter: value".to_string()),
+                })
+            }
         };
 
         if value > 1 {
@@ -194,11 +198,13 @@ impl Tool for GpioReadTool {
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         let pin = match args.get("pin").and_then(|v| v.as_u64()) {
             Some(p) => p,
-            None => return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("missing required parameter: pin".to_string()),
-            }),
+            None => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("missing required parameter: pin".to_string()),
+                })
+            }
         };
 
         // Resolve device alias and obtain an owned context (Arc-based) before
@@ -431,11 +437,7 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("not found"));
+        assert!(result.error.as_deref().unwrap().contains("not found"));
     }
 
     #[tokio::test]
@@ -465,12 +467,19 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap_or("").contains("missing required parameter: pin"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("missing required parameter: pin"));
 
         // Missing device with empty registry — auto-select finds no GPIO device → Ok(failure)
         let empty_reg = Arc::new(RwLock::new(DeviceRegistry::new()));
         let tool_no_reg = GpioWriteTool::new(empty_reg);
-        let result = tool_no_reg.execute(json!({"pin": 25, "value": 1})).await.unwrap();
+        let result = tool_no_reg
+            .execute(json!({"pin": 25, "value": 1}))
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.error.as_deref().unwrap_or("").contains("no GPIO"));
 
@@ -480,7 +489,11 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap_or("").contains("missing required parameter: value"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("missing required parameter: value"));
     }
 
     // ── GpioReadTool tests ───────────────────────────────────────────────
@@ -526,9 +539,7 @@ mod tests {
 
     #[tokio::test]
     async fn gpio_read_device_error() {
-        let mock = Arc::new(MockTransport::new(ZcResponse::error(
-            "pin not configured",
-        )));
+        let mock = Arc::new(MockTransport::new(ZcResponse::error("pin not configured")));
         let reg = registry_with_mock(mock);
         let tool = GpioReadTool::new(reg);
 
@@ -565,7 +576,11 @@ mod tests {
         // Missing pin
         let result = tool.execute(json!({"device": "pico0"})).await.unwrap();
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap_or("").contains("missing required parameter: pin"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("missing required parameter: pin"));
 
         // Missing device with empty registry — auto-select finds no GPIO device → Ok(failure)
         let empty_reg = Arc::new(RwLock::new(DeviceRegistry::new()));

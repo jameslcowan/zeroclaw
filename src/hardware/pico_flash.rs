@@ -184,11 +184,7 @@ impl Tool for PicoFlashTool {
                 let port_str = p.to_string_lossy();
                 let mut reg = self.registry.write().await;
                 // Try to find a pico alias in the registry.
-                match reg
-                    .aliases()
-                    .into_iter()
-                    .find(|a| a.starts_with("pico"))
-                {
+                match reg.aliases().into_iter().find(|a| a.starts_with("pico")) {
                     Some(a) => {
                         let alias = a.to_string();
                         reg.reconnect(&alias, Some(&port_str)).await
@@ -226,25 +222,23 @@ impl Tool for PicoFlashTool {
                     error: None,
                 })
             }
-            None => {
-                Ok(ToolResult {
-                    success: true,
-                    output: format!(
-                        "Pico flashed and main.py deployed. \
+            None => Ok(ToolResult {
+                success: true,
+                output: format!(
+                    "Pico flashed and main.py deployed. \
                          Serial port did not reappear within {PORT_WAIT_SECS}s after reset — \
                          unplug and replug the Pico, then restart ZeroClaw to connect as pico0."
-                    ),
-                    error: None,
-                })
-            }
+                ),
+                error: None,
+            }),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::device::DeviceRegistry;
+    use super::*;
 
     fn tool() -> PicoFlashTool {
         let registry = Arc::new(RwLock::new(DeviceRegistry::new()));
@@ -284,10 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_missing_confirm_returns_error() {
-        let result = tool()
-            .execute(serde_json::json!({}))
-            .await
-            .unwrap();
+        let result = tool().execute(serde_json::json!({})).await.unwrap();
         assert!(!result.success);
     }
 

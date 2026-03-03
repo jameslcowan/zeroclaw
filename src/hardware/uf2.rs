@@ -65,10 +65,13 @@ pub fn find_rpi_rp2_mount() -> Option<PathBuf> {
 pub fn ensure_firmware_dir() -> Result<PathBuf> {
     use directories::BaseDirs;
 
-    let base = BaseDirs::new()
-        .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?;
+    let base = BaseDirs::new().ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?;
 
-    let firmware_dir = base.home_dir().join(".zeroclaw").join("firmware").join("pico");
+    let firmware_dir = base
+        .home_dir()
+        .join(".zeroclaw")
+        .join("firmware")
+        .join("pico");
     std::fs::create_dir_all(&firmware_dir)?;
 
     // UF2 — validate magic before writing so a broken stub is caught early.
@@ -278,13 +281,7 @@ pub async fn deploy_main_py(port: &Path, firmware_dir: &Path) -> Result<()> {
 
     let out = tokio::process::Command::new("mpremote")
         .args([
-            "connect",
-            &port_str,
-            "cp",
-            &src_str,
-            ":main.py",
-            "+",
-            "reset",
+            "connect", &port_str, "cp", &src_str, ":main.py", "+", "reset",
         ])
         .output()
         .await;

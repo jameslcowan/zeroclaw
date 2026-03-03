@@ -1,36 +1,47 @@
 //! Serial peripheral — STM32 and similar boards over USB CDC/serial.
 //!
-//! Protocol: newline-delimited JSON (ZeroClaw wire protocol).
-//! Request:  {"cmd":"gpio_write","params":{"pin":13,"value":1}}
-//! Response: {"cmd":"gpio_write","ok":true,"data":"done"}
+//! Protocol: newline-delimited JSON.
+//! Request:  {"id":"1","cmd":"gpio_write","args":{"pin":13,"value":1}}
+//! Response: {"id":"1","ok":true,"result":"done"}
 
 use super::traits::Peripheral;
 use crate::config::PeripheralBoardConfig;
 use crate::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
-/// Uses the shared serial path allowlist from `crate::util`.
-use crate::util::is_serial_path_allowed as is_path_allowed;
+/// Allowed serial path patterns (security: deny arbitrary paths).
+const ALLOWED_PATH_PREFIXES: &[&str] = &[
+    "/dev/ttyACM",
+    "/dev/ttyUSB",
+    "/dev/tty.usbmodem",
+    "/dev/cu.usbmodem",
+    "/dev/tty.usbserial",
+    "/dev/cu.usbserial", // Arduino Uno (FTDI), clones
+    "COM",               // Windows
+];
 
-/// JSON request/response over serial — ZeroClaw wire protocol.
-///
-/// Wire format (must match firmware):
-///   Host → Device:  `{"cmd":"gpio_write","params":{"pin":25,"value":1}}\n`
-///   Device → Host:  `{"ok":true,"data":{"pin":25,"value":1,"state":"HIGH"}}\n`
-async fn send_request(port: &mut SerialStream, cmd: &str, params: Value) -> anyhow::Result<Value> {
-    let req = json!({ "cmd": cmd, "params": params });
+fn is_path_allowed(path: &str) -> bool {
+    ALLOWED_PATH_PREFIXES.iter().any(|p| path.starts_with(p))
+}
+
+/// JSON request/response over serial.
+async fn send_request(port: &mut SerialStream, cmd: &str, args: Value) -> anyhow::Result<Value> {
+    static ID: AtomicU64 = AtomicU64::new(0);
+    let id = ID.fetch_add(1, Ordering::Relaxed);
+    let id_str = id.to_string();
+
+    let req = json!({
+        "id": id_str,
+        "cmd": cmd,
+        "args": args
+    });
     let line = format!("{}\n", req);
-
-    tracing::info!(
-        cmd = %cmd,
-        payload_len = line.len(),
-        "serial write"
-    );
 
     port.write_all(line.as_bytes()).await?;
     port.flush().await?;
@@ -44,8 +55,11 @@ async fn send_request(port: &mut SerialStream, cmd: &str, params: Value) -> anyh
         buf.push(b[0]);
     }
     let line_str = String::from_utf8_lossy(&buf);
-    tracing::info!(response_len = line_str.trim().len(), "serial read");
     let resp: Value = serde_json::from_str(line_str.trim())?;
+    let resp_id = resp["id"].as_str().unwrap_or("");
+    if resp_id != id_str {
+        anyhow::bail!("Response id mismatch: expected {}, got {}", id_str, resp_id);
+    }
     Ok(resp)
 }
 
@@ -57,58 +71,28 @@ pub(crate) struct SerialTransport {
 /// Timeout for serial request/response (seconds).
 const SERIAL_TIMEOUT_SECS: u64 = 5;
 
-/// Drain bytes from `port` until a newline (or 200 ms silence) to resync the
-/// wire protocol after a timeout — prevents a stale response from poisoning
-/// the next request.
-async fn drain_to_newline(port: &mut SerialStream) {
-    use tokio::io::AsyncReadExt;
-    let mut b = [0u8; 1];
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_millis(200),
-        async {
-            loop {
-                match port.read(&mut b).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) if b[0] == b'\n' => break,
-                    Ok(_) => {}
-                }
-            }
-        },
-    )
-    .await;
-}
-
 impl SerialTransport {
     async fn request(&self, cmd: &str, args: Value) -> anyhow::Result<ToolResult> {
         let mut port = self.port.lock().await;
-        let resp = match tokio::time::timeout(
+        let resp = tokio::time::timeout(
             std::time::Duration::from_secs(SERIAL_TIMEOUT_SECS),
-            send_request(&mut *port, cmd, args),
+            send_request(&mut port, cmd, args),
         )
         .await
-        {
-            Err(_) => {
-                drain_to_newline(&mut *port).await;
-                return Err(anyhow::anyhow!(
-                    "Serial request timed out after {}s",
-                    SERIAL_TIMEOUT_SECS
-                ));
-            }
-            Ok(result) => result?,
-        };
+        .map_err(|_| {
+            anyhow::anyhow!("Serial request timed out after {}s", SERIAL_TIMEOUT_SECS)
+        })??;
 
         let ok = resp["ok"].as_bool().unwrap_or(false);
-        // Firmware responds with "data" object; stringify it for the tool output.
-        let output = if resp["data"].is_null() || resp["data"].is_object() {
-            resp["data"].to_string()
-        } else {
-            resp["data"].as_str().map(String::from).unwrap_or_else(|| resp["data"].to_string())
-        };
+        let result = resp["result"]
+            .as_str()
+            .map(String::from)
+            .unwrap_or_else(|| resp["result"].to_string());
         let error = resp["error"].as_str().map(String::from);
 
         Ok(ToolResult {
             success: ok,
-            output,
+            output: result,
             error,
         })
     }
@@ -284,16 +268,6 @@ impl Tool for GpioWriteTool {
             .get("value")
             .and_then(|v| v.as_u64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'value' parameter"))?;
-        if value != 0 && value != 1 {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "Invalid 'value' parameter: expected 0 or 1, got {}",
-                    value
-                )),
-            });
-        }
         self.transport
             .request("gpio_write", json!({ "pin": pin, "value": value }))
             .await
