@@ -3970,6 +3970,14 @@ or tune thresholds in config.",
                     sender = %msg.sender,
                     "Suppressed sentinel reply in channel conversation"
                 );
+                // Cancel any in-flight draft so it doesn't linger in the UI.
+                if let (Some(channel), Some(draft_id)) =
+                    (target_channel.as_ref(), draft_message_id.as_deref())
+                {
+                    if let Err(err) = channel.cancel_draft(&msg.reply_target, draft_id).await {
+                        tracing::debug!("Failed to cancel draft after sentinel suppression: {err}");
+                    }
+                }
                 return;
             }
 
