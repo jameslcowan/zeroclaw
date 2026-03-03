@@ -112,14 +112,24 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
-        let mut sigterm =
-            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                tracing::info!("Received SIGINT, initiating graceful shutdown");
+        match signal(SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                tokio::select! {
+                    result = tokio::signal::ctrl_c() => {
+                        if let Err(e) = result {
+                            tracing::error!("Failed to listen for SIGINT: {e}");
+                        }
+                        tracing::info!("Received SIGINT, initiating graceful shutdown");
+                    }
+                    _ = sigterm.recv() => {
+                        tracing::info!("Received SIGTERM, initiating graceful shutdown");
+                    }
+                }
             }
-            _ = sigterm.recv() => {
-                tracing::info!("Received SIGTERM, initiating graceful shutdown");
+            Err(e) => {
+                tracing::warn!("Could not install SIGTERM handler ({e}), falling back to SIGINT only");
+                tokio::signal::ctrl_c().await?;
+                tracing::info!("Received SIGINT, initiating graceful shutdown");
             }
         }
     }
