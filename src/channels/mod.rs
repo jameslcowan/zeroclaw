@@ -8112,7 +8112,6 @@ BTC is currently around $65,000 based on latest tool output."#
             model: "gpt-5.3-codex".to_string(),
             max_tokens: Some(512),
             api_key: Some("route-specific-key".to_string()),
-            transport: Some("sse".to_string()),
         }];
 
         let config_path = cfg.config_path.clone();

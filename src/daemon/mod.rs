@@ -45,7 +45,7 @@ async fn wait_for_shutdown_signal() -> Result<ShutdownSignal> {
             }
             sigterm_result = sigterm.recv() => match sigterm_result {
                 Some(()) => Ok(ShutdownSignal::SigTerm),
-                None => bail!("SIGTERM signal stream unexpectedly closed"),
+                None => anyhow::bail!("SIGTERM signal stream unexpectedly closed"),
             },
         }
     }
