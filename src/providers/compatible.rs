@@ -526,20 +526,23 @@ impl ResponseMessage {
 struct ToolCall {
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
-    #[serde(rename = "type")]
-    #[serde(default)]
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     kind: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     function: Option<Function>,
 
     // Compatibility: Some providers (e.g., older GLM) may use 'name' directly
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     arguments: Option<String>,
 
     // Compatibility: DeepSeek sometimes wraps arguments differently
-    #[serde(rename = "parameters", default)]
+    #[serde(
+        rename = "parameters",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     parameters: Option<serde_json::Value>,
 }
 
@@ -2917,6 +2920,26 @@ mod tests {
             Some(MessageContent::Text(value))
                 if value == "System primer [IMAGE:data:image/png;base64,abcd] user turn"
         ));
+    }
+
+    #[test]
+    fn convert_messages_for_native_omits_null_compatibility_tool_call_fields() {
+        let input = vec![ChatMessage::assistant(
+            r#"{"content":"Need tool","tool_calls":[{"id":"call_abc","name":"shell","arguments":"{\"command\":\"pwd\"}"}]}"#,
+        )];
+
+        let converted = OpenAiCompatibleProvider::convert_messages_for_native(&input, true);
+        assert_eq!(converted.len(), 1);
+
+        let serialized = serde_json::to_value(&converted[0]).unwrap();
+        let tool_call = &serialized["tool_calls"][0];
+        assert_eq!(tool_call["id"], "call_abc");
+        assert_eq!(tool_call["type"], "function");
+        assert_eq!(tool_call["function"]["name"], "shell");
+        assert_eq!(tool_call["function"]["arguments"], "{\"command\":\"pwd\"}");
+        assert!(tool_call.get("name").is_none());
+        assert!(tool_call.get("arguments").is_none());
+        assert!(tool_call.get("parameters").is_none());
     }
 
     #[test]
