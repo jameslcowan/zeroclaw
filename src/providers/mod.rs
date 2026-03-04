@@ -74,6 +74,7 @@ const QWEN_OAUTH_CREDENTIAL_FILE: &str = ".qwen/oauth_creds.json";
 const ZAI_GLOBAL_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
 const ZAI_CN_BASE_URL: &str = "https://open.bigmodel.cn/api/coding/paas/v4";
 const VERCEL_AI_GATEWAY_BASE_URL: &str = "https://ai-gateway.vercel.sh/v1";
+const LITELLM_BASE_URL: &str = "http://localhost:4000/v1";
 
 pub(crate) fn is_minimax_intl_alias(name: &str) -> bool {
     matches!(
@@ -876,6 +877,7 @@ fn resolve_provider_credential(name: &str, credential_override: Option<&str>) ->
         "llamacpp" | "llama.cpp" => vec!["LLAMACPP_API_KEY"],
         "sglang" => vec!["SGLANG_API_KEY"],
         "vllm" => vec!["VLLM_API_KEY"],
+        "litellm" | "lite-llm" => vec!["LITELLM_API_KEY"],
         "osaurus" => vec!["OSAURUS_API_KEY"],
         "telnyx" => vec!["TELNYX_API_KEY"],
         _ => vec![],
@@ -1246,6 +1248,18 @@ fn create_provider_with_url_and_options(
                 .unwrap_or("http://localhost:8000/v1");
             Ok(Box::new(OpenAiCompatibleProvider::new(
                 "vLLM",
+                base_url,
+                key,
+                AuthStyle::Bearer,
+            )))
+        }
+        "litellm" | "lite-llm" => {
+            let base_url = api_url
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(LITELLM_BASE_URL);
+            Ok(Box::new(OpenAiCompatibleProvider::new(
+                "LiteLLM",
                 base_url,
                 key,
                 AuthStyle::Bearer,
@@ -1787,6 +1801,12 @@ pub fn list_providers() -> Vec<ProviderInfo> {
             name: "vllm",
             display_name: "vLLM",
             aliases: &[],
+            local: true,
+        },
+        ProviderInfo {
+            name: "litellm",
+            display_name: "LiteLLM",
+            aliases: &["lite-llm"],
             local: true,
         },
         ProviderInfo {
@@ -2343,6 +2363,25 @@ mod tests {
     }
 
     #[test]
+    fn factory_litellm() {
+        assert!(create_provider("litellm", None).is_ok());
+        assert!(create_provider("litellm", Some("key")).is_ok());
+        assert!(create_provider("lite-llm", Some("key")).is_ok());
+    }
+
+    #[test]
+    fn factory_litellm_custom_url() {
+        let options = ProviderRuntimeOptions::default();
+        let provider = create_provider_with_url_and_options(
+            "litellm",
+            Some("key"),
+            Some("https://litellm.example.com/v1"),
+            &options,
+        );
+        assert!(provider.is_ok());
+    }
+
+    #[test]
     fn factory_osaurus() {
         // Osaurus works without an explicit key (defaults to "osaurus").
         assert!(create_provider("osaurus", None).is_ok());
@@ -2378,6 +2417,18 @@ mod tests {
         let _guard = EnvGuard::set("OSAURUS_API_KEY", Some("osaurus-test-key"));
         let resolved = resolve_provider_credential("osaurus", None);
         assert_eq!(resolved, Some("osaurus-test-key".to_string()));
+    }
+
+    #[test]
+    fn resolve_provider_credential_uses_litellm_env_key() {
+        let _env_lock = env_lock();
+        let _litellm_guard = EnvGuard::set("LITELLM_API_KEY", Some("litellm-key"));
+
+        let resolved = resolve_provider_credential("litellm", None);
+        assert_eq!(resolved.as_deref(), Some("litellm-key"));
+
+        let alias_resolved = resolve_provider_credential("lite-llm", None);
+        assert_eq!(alias_resolved.as_deref(), Some("litellm-key"));
     }
 
     // ── Extended ecosystem ───────────────────────────────────
