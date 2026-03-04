@@ -25,12 +25,12 @@ Built by students and members of the Harvard, MIT, and Sundai.Club communities.
 </p>
 
 <p align="center">
-  🌐 <strong>Languages:</strong> <a href="README.md">English</a> · <a href="docs/i18n/zh-CN/README.md">简体中文</a> · <a href="docs/i18n/ja/README.md">日本語</a> · <a href="docs/i18n/ru/README.md">Русский</a> · <a href="docs/i18n/fr/README.md">Français</a> · <a href="docs/i18n/vi/README.md">Tiếng Việt</a> · <a href="docs/i18n/el/README.md">Ελληνικά</a>
+  🌐 <strong>Languages:</strong> <a href="README.md">English</a> · <a href="docs/i18n/zh-CN/README.md">简体中文</a> · <a href="docs/i18n/es/README.md">Español</a> · <a href="docs/i18n/pt/README.md">Português</a> · <a href="docs/i18n/it/README.md">Italiano</a> · <a href="docs/i18n/ja/README.md">日本語</a> · <a href="docs/i18n/ru/README.md">Русский</a> · <a href="docs/i18n/fr/README.md">Français</a> · <a href="docs/i18n/vi/README.md">Tiếng Việt</a> · <a href="docs/i18n/el/README.md">Ελληνικά</a>
 </p>
 
 <p align="center">
   <a href="#quick-start">Getting Started</a> |
-  <a href="bootstrap.sh">One-Click Setup</a> |
+  <a href="docs/one-click-bootstrap.md">One-Click Setup</a> |
   <a href="docs/README.md">Docs Hub</a> |
   <a href="docs/SUMMARY.md">Docs TOC</a>
 </p>
@@ -46,12 +46,12 @@ Built by students and members of the Harvard, MIT, and Sundai.Club communities.
 </p>
 
 <p align="center">
-  <strong>Fast, small, and fully autonomous Operating System</strong><br />
+  <strong>Fast, small, and fully autonomous Framework</strong><br />
   Deploy anywhere. Swap anything.
 </p>
 
 <p align="center">
-  ZeroClaw is the <strong>runtime operating system</strong> for agentic workflows — infrastructure that abstracts models, tools, memory, and execution so agents can be built once and run anywhere.
+  ZeroClaw is the <strong>runtime framework</strong> for agentic workflows — infrastructure that abstracts models, tools, memory, and execution so agents can be built once and run anywhere.
 </p>
 
 <p align="center"><code>Trait-driven architecture · secure-by-default runtime · provider/channel/tool swappable · pluggable everything</code></p>
@@ -83,6 +83,12 @@ Use this board for important notices (breaking changes, security advisories, mai
 
 ## Quick Start
 
+### Option 0: One-line Installer (Default TUI Onboarding)
+
+```bash
+curl -fsSL https://zeroclawlabs.ai/install.sh | bash
+```
+
 ### Option 1: Homebrew (macOS/Linuxbrew)
 
 ```bash
@@ -108,17 +114,27 @@ cargo install zeroclaw
 ### First Run
 
 ```bash
-# Start the gateway daemon
-zeroclaw gateway start
+# Start the gateway (serves the Web Dashboard API/UI)
+zeroclaw gateway
 
-# Open the web UI
-zeroclaw dashboard
+# Open the dashboard URL shown in startup logs
+# (default: http://127.0.0.1:3000/)
 
 # Or chat directly
 zeroclaw chat "Hello!"
 ```
 
 For detailed setup options, see [docs/one-click-bootstrap.md](docs/one-click-bootstrap.md).
+
+### Installation Docs (Canonical Source)
+
+Use repository docs as the source of truth for install/setup instructions:
+
+- [README Quick Start](#quick-start)
+- [docs/one-click-bootstrap.md](docs/one-click-bootstrap.md)
+- [docs/getting-started/README.md](docs/getting-started/README.md)
+
+Issue comments can provide context, but they are not canonical installation documentation.
 
 ## Benchmark Snapshot (ZeroClaw vs OpenClaw, Reproducible)
 

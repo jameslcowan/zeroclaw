@@ -56,6 +56,8 @@ Telegram/Discord sender-scoped model routing:
 Supervised tool approvals (all non-CLI channels):
 - `/approve-request <tool-name>` — create a pending approval request
 - `/approve-confirm <request-id>` — confirm pending request (same sender + same chat/channel only)
+- `/approve-allow <request-id>` — approve the current pending runtime execution request once (no policy persistence)
+- `/approve-deny <request-id>` — deny the current pending runtime execution request
 - `/approve-pending` — list pending requests for your current sender+chat/channel scope
 - `/approve <tool-name>` — direct one-step approve + persist (`autonomy.auto_approve`, compatibility path)
 - `/unapprove <tool-name>` — revoke and remove persisted approval
@@ -76,6 +78,7 @@ Notes:
 - You can restrict who can use approval-management commands via `[autonomy].non_cli_approval_approvers`.
 - Configure natural-language approval mode via `[autonomy].non_cli_natural_language_approval_mode`.
 - `autonomy.non_cli_excluded_tools` is reloaded from `config.toml` at runtime; `/approvals` shows the currently effective list.
+- Default non-CLI exclusions include both `shell` and `process`; remove `process` from `[autonomy].non_cli_excluded_tools` only when you explicitly want background command execution in chat channels.
 - Each incoming message injects a runtime tool-availability snapshot into the system prompt, derived from the same exclusion policy used by execution.
 
 ## Inbound Image Marker Protocol
@@ -145,6 +148,7 @@ If `[channels_config.matrix]`, `[channels_config.lark]`, or `[channels_config.fe
 | QQ | bot gateway | No |
 | Napcat | websocket receive + HTTP send (OneBot) | No (typically local/LAN) |
 | Linq | webhook (`/linq`) | Yes (public HTTPS callback) |
+| WATI | webhook (`/wati`) | Yes (public HTTPS callback) |
 | iMessage | local integration | No |
 | ACP | stdio (JSON-RPC 2.0) | No |
 | Nostr | relay websocket (NIP-04 / NIP-17) | No |
@@ -163,7 +167,7 @@ Field names differ by channel:
 
 - `allowed_users` (Telegram/Discord/Slack/Mattermost/Matrix/IRC/Lark/Feishu/DingTalk/QQ/Napcat/Nextcloud Talk/ACP)
 - `allowed_from` (Signal)
-- `allowed_numbers` (WhatsApp)
+- `allowed_numbers` (WhatsApp/WATI)
 - `allowed_senders` (Email/Linq)
 - `allowed_contacts` (iMessage)
 - `allowed_pubkeys` (Nostr)
@@ -199,7 +203,7 @@ allowed_sender_ids = ["123456789", "987"] # optional; "*" allowed
 [channels_config.telegram]
 bot_token = "123456:telegram-token"
 allowed_users = ["*"]
-stream_mode = "off"               # optional: off | partial
+stream_mode = "off"               # optional: off | partial | on
 draft_update_interval_ms = 1000   # optional: edit throttle for partial streaming
 mention_only = false              # legacy fallback; used when group_reply.mode is not set
 interrupt_on_new_message = false  # optional: cancel in-flight same-sender same-chat request
@@ -215,6 +219,7 @@ Telegram notes:
 - `interrupt_on_new_message = true` preserves interrupted user turns in conversation history, then restarts generation on the newest message.
 - Interruption scope is strict: same sender in the same chat. Messages from different chats are processed independently.
 - `ack_enabled = false` disables the emoji reaction (⚡️, 👌, 👀, 🔥, 👍) sent to incoming messages as acknowledgment.
+- `stream_mode = "on"` uses Telegram's native `sendMessageDraft` flow for private chats. Non-private chats, or runtime `sendMessageDraft` API failures, automatically fall back to `partial`.
 
 ### 4.2 Discord
 
@@ -541,7 +546,29 @@ Notes:
 allowed_contacts = ["*"]
 ```
 
-### 4.18 ACP
+### 4.20 WATI
+
+```toml
+[channels_config.wati]
+api_token = "wati-api-token"
+api_url = "https://live-mt-server.wati.io"  # optional
+webhook_secret = "required-shared-secret"
+tenant_id = "tenant-id"                      # optional
+allowed_numbers = ["*"]                      # optional, "*" = allow all
+```
+
+Notes:
+
+- Inbound webhook endpoint: `POST /wati`.
+- WATI webhook auth is fail-closed:
+  - `500` when `webhook_secret` is not configured.
+  - `401` when signature/bearer auth is missing or invalid.
+- Accepted auth methods:
+  - `X-Hub-Signature-256`, `X-Wati-Signature`, or `X-Webhook-Signature` HMAC-SHA256 (`sha256=<hex>` or raw hex)
+  - `Authorization: Bearer <webhook_secret>` fallback
+- `ZEROCLAW_WATI_WEBHOOK_SECRET` overrides `webhook_secret` when set.
+
+### 4.21 ACP
 
 ACP (Agent Client Protocol) enables ZeroClaw to act as a client for OpenCode ACP server,
 allowing remote control of OpenCode behavior through JSON-RPC 2.0 communication over stdio.

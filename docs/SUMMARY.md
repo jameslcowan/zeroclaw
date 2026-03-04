@@ -94,6 +94,7 @@ Last refreshed: **February 28, 2026**.
 - [pr-workflow.md](pr-workflow.md)
 - [reviewer-playbook.md](reviewer-playbook.md)
 - [ci-map.md](ci-map.md)
+- [ci-blacksmith.md](ci-blacksmith.md)
 - [actions-source-policy.md](actions-source-policy.md)
 - [cargo-slicer-speedup.md](cargo-slicer-speedup.md)
 
@@ -111,5 +112,7 @@ Last refreshed: **February 28, 2026**.
 - [project-triage-snapshot-2026-02-18.md](project-triage-snapshot-2026-02-18.md)
 - [docs-audit-2026-02-24.md](docs-audit-2026-02-24.md)
 - [project/m4-5-rfi-spike-2026-02-28.md](project/m4-5-rfi-spike-2026-02-28.md)
+- [project/f1-3-agent-lifecycle-state-machine-rfi-2026-03-01.md](project/f1-3-agent-lifecycle-state-machine-rfi-2026-03-01.md)
+- [project/q0-3-stop-reason-state-machine-rfi-2026-03-01.md](project/q0-3-stop-reason-state-machine-rfi-2026-03-01.md)
 - [i18n-gap-backlog.md](i18n-gap-backlog.md)
 - [docs-inventory.md](docs-inventory.md)

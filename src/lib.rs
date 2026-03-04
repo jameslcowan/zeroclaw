@@ -1,5 +1,6 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![forbid(unsafe_code)]
+#![recursion_limit = "256"]
 #![allow(
     clippy::assigning_clones,
     clippy::bool_to_int_with_if,
@@ -73,6 +74,8 @@ pub mod runtime;
 pub(crate) mod security;
 pub(crate) mod service;
 pub(crate) mod skills;
+#[cfg(test)]
+pub(crate) mod test_locks;
 pub mod tools;
 pub(crate) mod tunnel;
 pub mod update;
@@ -192,15 +195,27 @@ pub enum SkillCommands {
 /// Migration subcommands
 #[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MigrateCommands {
-    /// Import memory from an `OpenClaw` workspace into this `ZeroClaw` workspace
+    /// Import OpenClaw data into this ZeroClaw workspace (memory, config, agents)
     Openclaw {
         /// Optional path to `OpenClaw` workspace (defaults to ~/.openclaw/workspace)
         #[arg(long)]
         source: Option<std::path::PathBuf>,
 
+        /// Optional path to `OpenClaw` config file (defaults to ~/.openclaw/openclaw.json)
+        #[arg(long)]
+        source_config: Option<std::path::PathBuf>,
+
         /// Validate and preview migration without writing any data
         #[arg(long)]
         dry_run: bool,
+
+        /// Skip memory migration
+        #[arg(long)]
+        no_memory: bool,
+
+        /// Skip configuration and agents migration
+        #[arg(long)]
+        no_config: bool,
     },
 }
 
@@ -355,6 +370,15 @@ pub enum MemoryCommands {
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
+    },
+    /// Rebuild embeddings for all memories (use after changing embedding model)
+    Reindex {
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+        /// Show progress during reindex
+        #[arg(long, default_value = "true")]
+        progress: bool,
     },
 }
 

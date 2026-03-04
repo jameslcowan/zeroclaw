@@ -15,6 +15,7 @@ Last verified: **February 28, 2026**.
 | `service` | Manage user-level OS service lifecycle |
 | `doctor` | Run diagnostics and freshness checks |
 | `status` | Print current configuration and system summary |
+| `update` | Check or install latest ZeroClaw release |
 | `estop` | Engage/resume emergency stop levels and inspect estop state |
 | `cron` | Manage scheduled tasks |
 | `models` | Refresh provider model catalogs |
@@ -40,6 +41,8 @@ Last verified: **February 28, 2026**.
 - `zeroclaw onboard --api-key <KEY> --provider <ID> --memory <sqlite|lucid|markdown|none>`
 - `zeroclaw onboard --api-key <KEY> --provider <ID> --model <MODEL_ID> --memory <sqlite|lucid|markdown|none>`
 - `zeroclaw onboard --api-key <KEY> --provider <ID> --model <MODEL_ID> --memory <sqlite|lucid|markdown|none> --force`
+- `zeroclaw onboard --migrate-openclaw`
+- `zeroclaw onboard --migrate-openclaw --openclaw-source <PATH> --openclaw-config <PATH>`
 
 `onboard` safety behavior:
 
@@ -48,6 +51,8 @@ Last verified: **February 28, 2026**.
   - Provider-only update (update provider/model/API key while preserving existing channels, tunnel, memory, hooks, and other settings)
 - In non-interactive environments, existing `config.toml` causes a safe refusal unless `--force` is passed.
 - Use `zeroclaw onboard --channels-only` when you only need to rotate channel tokens/allowlists.
+- OpenClaw migration mode is merge-first by design: existing ZeroClaw data/config is preserved, missing fields are filled, and list-like values are union-merged with de-duplication.
+- Interactive onboarding can auto-detect `~/.openclaw` and prompt for optional merge migration even without `--migrate-openclaw`.
 
 ### `agent`
 
@@ -59,9 +64,11 @@ Last verified: **February 28, 2026**.
 Tip:
 
 - In interactive chat, you can ask for route changes in natural language (for example “conversation uses kimi, coding uses gpt-5.3-codex”); the assistant can persist this via tool `model_routing_config`.
+- In interactive chat, you can also ask for runtime orchestration changes in natural language (for example “disable agent teams”, “enable subagents”, “set max concurrent subagents to 24”, “use least_loaded strategy”); the assistant can persist this via `model_routing_config` action `set_orchestration`.
 - In interactive chat, you can also ask to:
   - switch web search provider/fallbacks (`web_search_config`)
   - inspect or update domain access policy (`web_access_config`)
+  - preview/apply OpenClaw merge migration (`openclaw_migration`)
 
 ### `gateway` / `daemon`
 
@@ -98,6 +105,18 @@ Notes:
 - `zeroclaw service status`
 - `zeroclaw service uninstall`
 
+### `update`
+
+- `zeroclaw update --check` (check for new release, no install)
+- `zeroclaw update` (install latest release binary for current platform)
+- `zeroclaw update --force` (reinstall even if current version matches latest)
+- `zeroclaw update --instructions` (print install-method-specific guidance)
+
+Notes:
+
+- If ZeroClaw is installed via Homebrew, prefer `brew upgrade zeroclaw`.
+- `update --instructions` detects common install methods and prints the safest path.
+
 ### `cron`
 
 - `zeroclaw cron list`
@@ -120,7 +139,7 @@ Notes:
 - `zeroclaw models refresh --provider <ID>`
 - `zeroclaw models refresh --force`
 
-`models refresh` currently supports live catalog refresh for provider IDs: `openrouter`, `openai`, `anthropic`, `groq`, `mistral`, `deepseek`, `xai`, `together-ai`, `gemini`, `ollama`, `llamacpp`, `sglang`, `vllm`, `astrai`, `venice`, `fireworks`, `cohere`, `moonshot`, `glm`, `zai`, `qwen`, `volcengine` (`doubao`/`ark` aliases), `siliconflow`, and `nvidia`.
+`models refresh` currently supports live catalog refresh for provider IDs: `openrouter`, `openai`, `anthropic`, `groq`, `mistral`, `deepseek`, `xai`, `together-ai`, `gemini`, `ollama`, `llamacpp`, `sglang`, `vllm`, `astrai`, `venice`, `fireworks`, `cohere`, `moonshot`, `stepfun`, `glm`, `zai`, `qwen`, `volcengine` (`doubao`/`ark` aliases), `siliconflow`, and `nvidia`.
 
 #### Live model availability test
 
@@ -173,6 +192,8 @@ Runtime in-chat commands while channel server is running:
 - Supervised tool approvals (all non-CLI channels):
   - `/approve-request <tool-name>` (create pending approval request)
   - `/approve-confirm <request-id>` (confirm pending request; same sender + same chat/channel only)
+  - `/approve-allow <request-id>` (approve current pending runtime execution request once; no policy persistence)
+  - `/approve-deny <request-id>` (deny current pending runtime execution request)
   - `/approve-pending` (list pending requests in current sender+chat/channel scope)
   - `/approve <tool-name>` (direct one-step grant + persist to `autonomy.auto_approve`, compatibility path)
   - `/unapprove <tool-name>` (revoke + remove from `autonomy.auto_approve`)
@@ -259,11 +280,24 @@ Registry packages are installed to `~/.zeroclaw/workspace/skills/<name>/`.
 
 Use `skills audit` to manually validate a candidate skill directory (or an installed skill by name) before sharing it.
 
+Workspace symlink policy:
+- Symlinked entries under `~/.zeroclaw/workspace/skills/` are blocked by default.
+- To allow shared local skill directories, set `[skills].trusted_skill_roots` in `config.toml`.
+- A symlinked skill is accepted only when its resolved canonical target is inside one of the trusted roots.
+
 Skill manifests (`SKILL.toml`) support `prompts` and `[[tools]]`; both are injected into the agent system prompt at runtime, so the model can follow skill instructions without manually reading skill files.
 
 ### `migrate`
 
-- `zeroclaw migrate openclaw [--source <path>] [--dry-run]`
+- `zeroclaw migrate openclaw [--source <path>] [--source-config <path>] [--dry-run] [--no-memory] [--no-config]`
+
+`migrate openclaw` behavior:
+
+- Default mode migrates both memory and config/agents with merge-first semantics.
+- Existing ZeroClaw values are preserved; migration does not overwrite existing user content.
+- Memory migration de-duplicates repeated content during merge while keeping existing entries intact.
+- `--dry-run` prints a migration report without writing data.
+- `--no-memory` or `--no-config` scopes migration to selected modules.
 
 ### `config`
 

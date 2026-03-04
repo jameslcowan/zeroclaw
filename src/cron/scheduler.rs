@@ -3,8 +3,8 @@ use crate::channels::LarkChannel;
 #[cfg(feature = "channel-matrix")]
 use crate::channels::MatrixChannel;
 use crate::channels::{
-    Channel, DiscordChannel, EmailChannel, MattermostChannel, NapcatChannel, QQChannel,
-    SendMessage, SlackChannel, TelegramChannel, WhatsAppChannel,
+    Channel, DingTalkChannel, DiscordChannel, EmailChannel, MattermostChannel, NapcatChannel,
+    QQChannel, SendMessage, SlackChannel, TelegramChannel, WhatsAppChannel,
 };
 use crate::config::Config;
 use crate::cron::{
@@ -59,7 +59,7 @@ pub async fn run(config: Config) -> Result<()> {
 
 pub async fn execute_job_now(config: &Config, job: &CronJob) -> (bool, String) {
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
-    execute_job_with_retry(config, &security, job).await
+    Box::pin(execute_job_with_retry(config, &security, job)).await
 }
 
 async fn execute_job_with_retry(
@@ -74,7 +74,7 @@ async fn execute_job_with_retry(
     for attempt in 0..=retries {
         let (success, output) = match job.job_type {
             JobType::Shell => run_job_command(config, security, job).await,
-            JobType::Agent => run_agent_job(config, security, job).await,
+            JobType::Agent => Box::pin(run_agent_job(config, security, job)).await,
         };
         last_output = output;
 
@@ -107,18 +107,21 @@ async fn process_due_jobs(
     crate::health::mark_component_ok(component);
 
     let max_concurrent = config.scheduler.max_concurrent.max(1);
-    let mut in_flight =
-        stream::iter(
-            jobs.into_iter().map(|job| {
-                let config = config.clone();
-                let security = Arc::clone(security);
-                let component = component.to_owned();
-                async move {
-                    execute_and_persist_job(&config, security.as_ref(), &job, &component).await
-                }
-            }),
-        )
-        .buffer_unordered(max_concurrent);
+    let mut in_flight = stream::iter(jobs.into_iter().map(|job| {
+        let config = config.clone();
+        let security = Arc::clone(security);
+        let component = component.to_owned();
+        async move {
+            Box::pin(execute_and_persist_job(
+                &config,
+                security.as_ref(),
+                &job,
+                &component,
+            ))
+            .await
+        }
+    }))
+    .buffer_unordered(max_concurrent);
 
     while let Some((job_id, success, output)) = in_flight.next().await {
         if !success {
@@ -137,7 +140,7 @@ async fn execute_and_persist_job(
     warn_if_high_frequency_agent_job(job);
 
     let started_at = Utc::now();
-    let (success, output) = execute_job_with_retry(config, security, job).await;
+    let (success, output) = Box::pin(execute_job_with_retry(config, security, job)).await;
     let finished_at = Utc::now();
     let success = persist_job_result(config, job, success, &output, started_at, finished_at).await;
 
@@ -176,7 +179,7 @@ async fn run_agent_job(
 
     let run_result = match job.session_target {
         SessionTarget::Main | SessionTarget::Isolated => {
-            crate::agent::run(
+            Box::pin(crate::agent::run(
                 config.clone(),
                 Some(prefixed_prompt),
                 None,
@@ -184,7 +187,8 @@ async fn run_agent_job(
                 config.default_temperature,
                 vec![],
                 false,
-            )
+                None,
+            ))
             .await
         }
     };
@@ -364,6 +368,7 @@ pub(crate) async fn deliver_announcement(
                 sl.bot_token.clone(),
                 sl.app_token.clone(),
                 sl.channel_id.clone(),
+                sl.channel_ids.clone(),
                 sl.allowed_users.clone(),
             );
             channel.send(&SendMessage::new(output, target)).await?;
@@ -381,6 +386,19 @@ pub(crate) async fn deliver_announcement(
                 mm.allowed_users.clone(),
                 mm.thread_replies.unwrap_or(true),
                 mm.mention_only.unwrap_or(false),
+            );
+            channel.send(&SendMessage::new(output, target)).await?;
+        }
+        "dingtalk" => {
+            let dt = config
+                .channels_config
+                .dingtalk
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("dingtalk channel not configured"))?;
+            let channel = DingTalkChannel::new(
+                dt.client_id.clone(),
+                dt.client_secret.clone(),
+                dt.allowed_users.clone(),
             );
             channel.send(&SendMessage::new(output, target)).await?;
         }
@@ -451,13 +469,27 @@ pub(crate) async fn deliver_announcement(
         "feishu" => {
             #[cfg(feature = "channel-lark")]
             {
-                let feishu = config
-                    .channels_config
-                    .feishu
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("feishu channel not configured"))?;
-                let channel = LarkChannel::from_feishu_config(feishu);
-                channel.send(&SendMessage::new(output, target)).await?;
+                // Try [channels_config.feishu] first, then fall back to [channels_config.lark] with use_feishu=true
+                if let Some(feishu_cfg) = &config.channels_config.feishu {
+                    let channel = LarkChannel::from_feishu_config(feishu_cfg);
+                    channel.send(&SendMessage::new(output, target)).await?;
+                } else if let Some(lark_cfg) = &config.channels_config.lark {
+                    if lark_cfg.use_feishu {
+                        let channel = LarkChannel::from_config(lark_cfg);
+                        channel.send(&SendMessage::new(output, target)).await?;
+                    } else {
+                        anyhow::bail!(
+                            "feishu channel not configured: [channels_config.feishu] is missing \
+                             and [channels_config.lark] exists but use_feishu=false"
+                        );
+                    }
+                } else {
+                    anyhow::bail!(
+                        "feishu channel not configured: \
+                                   neither [channels_config.feishu] nor [channels_config.lark] \
+                                   with use_feishu=true is configured"
+                    );
+                }
             }
             #[cfg(not(feature = "channel-lark"))]
             {
@@ -561,16 +593,20 @@ async fn run_job_command_with_timeout(
         );
     }
 
-    let child = match Command::new("sh")
-        .arg("-lc")
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
         .arg(&job.command)
         .current_dir(&config.workspace_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
-        .spawn()
-    {
+        // Keep shell child behavior deterministic under CI wrappers that set ENV/BASH_ENV.
+        .env_remove("ENV")
+        .env_remove("BASH_ENV");
+
+    let child = match command.spawn() {
         Ok(child) => child,
         Err(e) => return (false, format!("spawn error: {e}")),
     };
@@ -621,6 +657,12 @@ mod tests {
         fn unset(key: &'static str) -> Self {
             let original = std::env::var(key).ok();
             std::env::remove_var(key);
+            Self { key, original }
+        }
+
+        fn set(key: &'static str, value: impl AsRef<str>) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::set_var(key, value.as_ref());
             Self { key, original }
         }
     }
@@ -686,6 +728,24 @@ mod tests {
         assert!(success);
         assert!(output.contains("scheduler-ok"));
         assert!(output.contains("status=exit status: 0"));
+    }
+
+    #[tokio::test]
+    async fn run_job_command_ignores_invalid_shell_env_hooks() {
+        let _env = env_lock().await;
+        let tmp = TempDir::new().unwrap();
+        let config = test_config(&tmp).await;
+        let missing_hook = config.workspace_dir.join("missing-shell-hook.sh");
+        let missing_hook = missing_hook.to_string_lossy().to_string();
+        let _env_hook = EnvGuard::set("ENV", &missing_hook);
+        let _bash_env_hook = EnvGuard::set("BASH_ENV", &missing_hook);
+
+        let job = test_job("echo scheduler-ok");
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+        let (success, output) = run_job_command(&config, &security, &job).await;
+        assert!(success);
+        assert!(output.contains("scheduler-ok"));
     }
 
     #[tokio::test]

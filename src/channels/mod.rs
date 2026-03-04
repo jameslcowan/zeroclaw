@@ -14,8 +14,10 @@
 //! To add a new channel, implement [`Channel`] in a new submodule and wire it into
 //! [`start_channels`]. See `AGENTS.md` §7.2 for the full change playbook.
 
-pub mod clawdtalk;
+pub(crate) mod ack_reaction;
 pub mod acp;
+pub mod bluebubbles;
+pub mod clawdtalk;
 pub mod cli;
 pub mod dingtalk;
 pub mod discord;
@@ -46,6 +48,7 @@ pub mod whatsapp_storage;
 pub mod whatsapp_web;
 
 pub use acp::AcpChannel;
+pub use bluebubbles::BlueBubblesChannel;
 pub use clawdtalk::ClawdTalkChannel;
 pub use cli::CliChannel;
 pub use dingtalk::DingTalkChannel;
@@ -75,10 +78,12 @@ pub use whatsapp_web::WhatsAppWebChannel;
 
 use crate::agent::loop_::{
     build_shell_policy_instructions, build_tool_instructions_from_specs,
-    run_tool_call_loop_with_reply_target, scrub_credentials, SafetyHeartbeatConfig,
+    run_tool_call_loop_with_non_cli_approval_context, scrub_credentials, NonCliApprovalContext,
+    NonCliApprovalPrompt, SafetyHeartbeatConfig,
 };
+use crate::agent::session::{resolve_session_id, shared_session_manager, Session, SessionManager};
 use crate::approval::{ApprovalManager, ApprovalResponse, PendingApprovalError};
-use crate::config::{Config, NonCliNaturalLanguageApprovalMode};
+use crate::config::{Config, NonCliNaturalLanguageApprovalMode, ProgressMode};
 use crate::identity;
 use crate::memory::{self, Memory};
 use crate::observability::{self, runtime_trace, Observer};
@@ -100,6 +105,7 @@ use tokio_util::sync::CancellationToken;
 
 /// Per-sender conversation history for channel messages.
 type ConversationHistoryMap = Arc<Mutex<HashMap<String, Vec<ChatMessage>>>>;
+type ConversationLockMap = Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>;
 /// Maximum history messages to keep per sender.
 const MAX_CHANNEL_HISTORY: usize = 50;
 /// Minimum user-message length (in chars) for auto-save to memory.
@@ -130,6 +136,9 @@ const MEMORY_CONTEXT_ENTRY_MAX_CHARS: usize = 800;
 const MEMORY_CONTEXT_MAX_CHARS: usize = 4_000;
 const CHANNEL_HISTORY_COMPACT_KEEP_MESSAGES: usize = 12;
 const CHANNEL_HISTORY_COMPACT_CONTENT_CHARS: usize = 600;
+const CHANNEL_CONTEXT_TOKEN_ESTIMATE_LIMIT: usize = 90_000;
+const CHANNEL_CONTEXT_TOKEN_ESTIMATE_TARGET: usize = 80_000;
+const CHANNEL_CONTEXT_MIN_KEEP_NON_SYSTEM_MESSAGES: usize = 10;
 /// Guardrail for hook-modified outbound channel content.
 const CHANNEL_HOOK_MAX_OUTBOUND_CHARS: usize = 20_000;
 
@@ -156,6 +165,23 @@ fn clear_live_channels() {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clear();
+}
+
+fn runtime_telegram_progress_mode_store() -> &'static Mutex<ProgressMode> {
+    static STORE: OnceLock<Mutex<ProgressMode>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(ProgressMode::default()))
+}
+
+fn set_runtime_telegram_progress_mode(mode: ProgressMode) {
+    *runtime_telegram_progress_mode_store()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = mode;
+}
+
+fn runtime_telegram_progress_mode() -> ProgressMode {
+    *runtime_telegram_progress_mode_store()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 pub(crate) fn get_live_channel(name: &str) -> Option<Arc<dyn Channel>> {
@@ -224,6 +250,15 @@ struct ChannelRuntimeDefaults {
     api_key: Option<String>,
     api_url: Option<String>,
     reliability: crate::config::ReliabilityConfig,
+    cost: crate::config::CostConfig,
+    auto_save_memory: bool,
+    max_tool_iterations: usize,
+    min_relevance_score: f64,
+    message_timeout_secs: u64,
+    interrupt_on_new_message: bool,
+    multimodal: crate::config::MultimodalConfig,
+    query_classification: crate::config::QueryClassificationConfig,
+    model_routes: Vec<crate::config::ModelRouteConfig>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,6 +272,7 @@ struct RuntimeConfigState {
     defaults: ChannelRuntimeDefaults,
     perplexity_filter: crate::config::PerplexityFilterConfig,
     outbound_leak_guard: crate::config::OutboundLeakGuardConfig,
+    canary_tokens: bool,
     last_applied_stamp: Option<ConfigFileStamp>,
 }
 
@@ -244,6 +280,7 @@ struct RuntimeConfigState {
 struct RuntimeAutonomyPolicy {
     auto_approve: Vec<String>,
     always_ask: Vec<String>,
+    command_context_rules: Vec<crate::config::CommandContextRuleConfig>,
     non_cli_excluded_tools: Vec<String>,
     non_cli_approval_approvers: Vec<String>,
     non_cli_natural_language_approval_mode: NonCliNaturalLanguageApprovalMode,
@@ -251,6 +288,7 @@ struct RuntimeAutonomyPolicy {
         HashMap<String, NonCliNaturalLanguageApprovalMode>,
     perplexity_filter: crate::config::PerplexityFilterConfig,
     outbound_leak_guard: crate::config::OutboundLeakGuardConfig,
+    canary_tokens: bool,
 }
 
 fn runtime_config_store() -> &'static Mutex<HashMap<PathBuf, RuntimeConfigState>> {
@@ -278,6 +316,9 @@ struct ChannelRuntimeContext {
     max_tool_iterations: usize,
     min_relevance_score: f64,
     conversation_histories: ConversationHistoryMap,
+    conversation_locks: ConversationLockMap,
+    session_config: crate::config::AgentSessionConfig,
+    session_manager: Option<Arc<dyn SessionManager + Send + Sync>>,
     provider_cache: ProviderCacheMap,
     route_overrides: RouteSelectionMap,
     api_key: Option<String>,
@@ -350,8 +391,10 @@ fn conversation_history_key(msg: &traits::ChannelMessage) -> String {
     }
 
     // Include thread_ts for per-topic session isolation in forum groups
-    match &msg.thread_ts {
+    let channel = msg.channel.as_str();
+    match msg.thread_ts.as_deref().filter(|_| channel != "qq") {
         Some(tid) => format!("{}_{}_{}", msg.channel, tid, msg.sender),
+        None if channel == "qq" => format!("{}_{}_{}", msg.channel, msg.reply_target, msg.sender),
         None => format!("{}_{}", msg.channel, msg.sender),
     }
 }
@@ -503,6 +546,45 @@ fn channel_delivery_instructions(channel_name: &str) -> Option<&'static str> {
              - You can combine text and media in one response — text is sent first, then each attachment.\n\
              - Use tool results silently: answer the latest user message directly, and do not narrate delayed/internal tool execution bookkeeping.",
         ),
+        "lark" | "feishu" => Some(
+            "When responding on Lark/Feishu:\n\
+             - For image attachments, use markers: [IMAGE:<path-or-url-or-data-uri>]\n\
+             - Keep normal text outside markers and never wrap markers in code fences.\n\
+             - Prefer one marker per line to keep delivery deterministic.\n\
+             - If you include both text and images, put text first, then image markers.\n\
+             - Be concise and direct. Skip filler phrases.\n\
+             - Use tool results silently: answer the latest user message directly, and do not narrate delayed/internal tool execution bookkeeping.",
+        ),
+        "qq" => Some(
+            "When responding on QQ:\n\
+             - For image attachments, use markers: [IMAGE:<path-or-url-or-data-uri>]\n\
+             - Keep normal text outside markers and never wrap markers in code fences.\n\
+             - Prefer one marker per line to keep delivery deterministic.\n\
+             - If you include both text and images, put text first, then image markers.\n\
+             - Be concise and direct. Skip filler phrases.\n\
+             - Use tool results silently: answer the latest user message directly, and do not narrate delayed/internal tool execution bookkeeping.",
+        ),
+        "bluebubbles" => Some(
+            "You are responding on iMessage via BlueBubbles. Always complete your research before replying — use as many tool calls as needed to get a full, accurate answer.\n\
+             \n\
+             ## Text styles (iMessage native)\n\
+             - **bold** — key terms, scores, names, important info\n\
+             - *italic* — emphasis, secondary info\n\
+             - ~~strikethrough~~ — corrections or outdated info\n\
+             - __underline__ — titles, proper nouns\n\
+             - `code` — commands, technical terms\n\
+             \n\
+             ## Message effects (append to end, e.g. 'Great job! [EFFECT:confetti]')\n\
+             Available: [EFFECT:slam] [EFFECT:loud] [EFFECT:gentle] [EFFECT:invisible-ink]\n\
+             [EFFECT:confetti] [EFFECT:balloons] [EFFECT:fireworks] [EFFECT:lasers]\n\
+             [EFFECT:love] [EFFECT:celebration] [EFFECT:echo] [EFFECT:spotlight]\n\
+             Use effects sparingly and only when context clearly warrants it.\n\
+             \n\
+             ## Format rules\n\
+             - No markdown tables — use bullet lists with dashes\n\
+             - Keep replies conversational but complete — do not truncate results\n\
+             - Do not narrate tool execution — just do the research and give the answer",
+        ),
         _ => None,
     }
 }
@@ -649,6 +731,50 @@ fn split_internal_progress_delta(delta: &str) -> (bool, &str) {
     }
 }
 
+fn effective_progress_mode_for_message(
+    channel_name: &str,
+    expose_internal_tool_details: bool,
+) -> ProgressMode {
+    if channel_name.eq_ignore_ascii_case("cli") || expose_internal_tool_details {
+        ProgressMode::Verbose
+    } else if channel_name.eq_ignore_ascii_case("telegram") {
+        runtime_telegram_progress_mode()
+    } else {
+        ProgressMode::Off
+    }
+}
+
+fn is_verbose_only_progress_line(delta: &str) -> bool {
+    let trimmed = delta.trim_start();
+    trimmed.starts_with("\u{1f914} Thinking")
+        || trimmed.starts_with("\u{1f4ac} Got ")
+        || trimmed.starts_with("\u{21bb} Retrying")
+        || trimmed.starts_with("\u{26a0}\u{fe0f} Loop detected")
+}
+
+fn upsert_progress_section(accumulated: &mut String, block: &str) {
+    let section = format!(
+        "{}{}{}",
+        crate::agent::loop_::DRAFT_PROGRESS_SECTION_START,
+        block,
+        crate::agent::loop_::DRAFT_PROGRESS_SECTION_END
+    );
+    if let Some(start) = accumulated.find(crate::agent::loop_::DRAFT_PROGRESS_SECTION_START) {
+        if let Some(end_offset) =
+            accumulated[start..].find(crate::agent::loop_::DRAFT_PROGRESS_SECTION_END)
+        {
+            let end = start + end_offset + crate::agent::loop_::DRAFT_PROGRESS_SECTION_END.len();
+            accumulated.replace_range(start..end, &section);
+            return;
+        }
+    }
+    accumulated.push_str(&section);
+}
+
+fn strip_progress_section_markers(text: &str) -> String {
+    text.replace(crate::agent::loop_::DRAFT_PROGRESS_SECTION_START, "")
+        .replace(crate::agent::loop_::DRAFT_PROGRESS_SECTION_END, "")
+}
 fn build_channel_system_prompt(
     base_prompt: &str,
     channel_name: &str,
@@ -656,6 +782,7 @@ fn build_channel_system_prompt(
     expose_internal_tool_details: bool,
 ) -> String {
     let mut prompt = base_prompt.to_string();
+    crate::agent::prompt::refresh_prompt_datetime(&mut prompt);
 
     if let Some(instructions) = channel_delivery_instructions(channel_name) {
         if prompt.is_empty() {
@@ -951,6 +1078,14 @@ fn resolved_default_model(config: &Config) -> String {
 }
 
 fn runtime_defaults_from_config(config: &Config) -> ChannelRuntimeDefaults {
+    let message_timeout_secs =
+        effective_channel_message_timeout_secs(config.channels_config.message_timeout_secs);
+    let interrupt_on_new_message = config
+        .channels_config
+        .telegram
+        .as_ref()
+        .is_some_and(|tg| tg.interrupt_on_new_message);
+
     ChannelRuntimeDefaults {
         default_provider: resolved_default_provider(config),
         model: resolved_default_model(config),
@@ -958,6 +1093,15 @@ fn runtime_defaults_from_config(config: &Config) -> ChannelRuntimeDefaults {
         api_key: config.api_key.clone(),
         api_url: config.api_url.clone(),
         reliability: config.reliability.clone(),
+        cost: config.cost.clone(),
+        auto_save_memory: config.memory.auto_save,
+        max_tool_iterations: config.agent.max_tool_iterations,
+        min_relevance_score: config.memory.min_relevance_score,
+        message_timeout_secs,
+        interrupt_on_new_message,
+        multimodal: config.multimodal.clone(),
+        query_classification: config.query_classification.clone(),
+        model_routes: config.model_routes.clone(),
     }
 }
 
@@ -965,6 +1109,7 @@ fn runtime_autonomy_policy_from_config(config: &Config) -> RuntimeAutonomyPolicy
     RuntimeAutonomyPolicy {
         auto_approve: config.autonomy.auto_approve.clone(),
         always_ask: config.autonomy.always_ask.clone(),
+        command_context_rules: config.autonomy.command_context_rules.clone(),
         non_cli_excluded_tools: config.autonomy.non_cli_excluded_tools.clone(),
         non_cli_approval_approvers: config.autonomy.non_cli_approval_approvers.clone(),
         non_cli_natural_language_approval_mode: config
@@ -976,6 +1121,7 @@ fn runtime_autonomy_policy_from_config(config: &Config) -> RuntimeAutonomyPolicy
             .clone(),
         perplexity_filter: config.security.perplexity_filter.clone(),
         outbound_leak_guard: config.security.outbound_leak_guard.clone(),
+        canary_tokens: config.security.canary_tokens,
     }
 }
 
@@ -1003,6 +1149,15 @@ fn runtime_defaults_snapshot(ctx: &ChannelRuntimeContext) -> ChannelRuntimeDefau
         api_key: ctx.api_key.clone(),
         api_url: ctx.api_url.clone(),
         reliability: (*ctx.reliability).clone(),
+        cost: crate::config::CostConfig::default(),
+        auto_save_memory: ctx.auto_save_memory,
+        max_tool_iterations: ctx.max_tool_iterations,
+        min_relevance_score: ctx.min_relevance_score,
+        message_timeout_secs: ctx.message_timeout_secs,
+        interrupt_on_new_message: ctx.interrupt_on_new_message,
+        multimodal: ctx.multimodal.clone(),
+        query_classification: ctx.query_classification.clone(),
+        model_routes: ctx.model_routes.clone(),
     }
 }
 
@@ -1037,6 +1192,19 @@ fn runtime_outbound_leak_guard_snapshot(
     }
     crate::config::OutboundLeakGuardConfig::default()
 }
+
+fn runtime_canary_tokens_snapshot(ctx: &ChannelRuntimeContext) -> bool {
+    if let Some(config_path) = runtime_config_path(ctx) {
+        let store = runtime_config_store()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(state) = store.get(&config_path) {
+            return state.canary_tokens;
+        }
+    }
+    false
+}
+
 fn snapshot_non_cli_excluded_tools(ctx: &ChannelRuntimeContext) -> Vec<String> {
     ctx.non_cli_excluded_tools
         .lock()
@@ -1563,6 +1731,7 @@ async fn maybe_apply_runtime_config_update(ctx: &ChannelRuntimeContext) -> Resul
                 defaults: next_defaults.clone(),
                 perplexity_filter: next_autonomy_policy.perplexity_filter.clone(),
                 outbound_leak_guard: next_autonomy_policy.outbound_leak_guard.clone(),
+                canary_tokens: next_autonomy_policy.canary_tokens,
                 last_applied_stamp: Some(stamp),
             },
         );
@@ -1571,6 +1740,7 @@ async fn maybe_apply_runtime_config_update(ctx: &ChannelRuntimeContext) -> Resul
     ctx.approval_manager.replace_runtime_non_cli_policy(
         &next_autonomy_policy.auto_approve,
         &next_autonomy_policy.always_ask,
+        &next_autonomy_policy.command_context_rules,
         &next_autonomy_policy.non_cli_approval_approvers,
         next_autonomy_policy.non_cli_natural_language_approval_mode,
         &next_autonomy_policy.non_cli_natural_language_approval_mode_by_channel,
@@ -1597,6 +1767,7 @@ async fn maybe_apply_runtime_config_update(ctx: &ChannelRuntimeContext) -> Resul
         outbound_leak_guard_enabled = next_autonomy_policy.outbound_leak_guard.enabled,
         outbound_leak_guard_action = ?next_autonomy_policy.outbound_leak_guard.action,
         outbound_leak_guard_sensitivity = next_autonomy_policy.outbound_leak_guard.sensitivity,
+        canary_tokens = next_autonomy_policy.canary_tokens,
         "Applied updated channel runtime config from disk"
     );
 
@@ -1623,14 +1794,14 @@ fn get_route_selection(ctx: &ChannelRuntimeContext, sender_key: &str) -> Channel
 /// Classify a user message and return the appropriate route selection with logging.
 /// Returns None if classification is disabled or no rules match.
 fn classify_message_route(
-    ctx: &ChannelRuntimeContext,
+    query_classification: &crate::config::QueryClassificationConfig,
+    model_routes: &[crate::config::ModelRouteConfig],
     message: &str,
 ) -> Option<ChannelRouteSelection> {
-    let decision =
-        crate::agent::classifier::classify_with_decision(&ctx.query_classification, message)?;
+    let decision = crate::agent::classifier::classify_with_decision(query_classification, message)?;
 
     // Find the matching model route
-    let route = ctx.model_routes.iter().find(|r| r.hint == decision.hint)?;
+    let route = model_routes.iter().find(|r| r.hint == decision.hint)?;
 
     tracing::info!(
         target: "query_classification",
@@ -1712,6 +1883,40 @@ fn append_sender_turn(ctx: &ChannelRuntimeContext, sender_key: &str, turn: ChatM
     while turns.len() > MAX_CHANNEL_HISTORY {
         turns.remove(0);
     }
+}
+
+fn estimated_message_tokens(message: &ChatMessage) -> usize {
+    (message.content.chars().count().saturating_add(2) / 3).saturating_add(4)
+}
+
+fn estimated_history_tokens(history: &[ChatMessage]) -> usize {
+    history.iter().map(estimated_message_tokens).sum()
+}
+
+fn trim_channel_prompt_history(history: &mut Vec<ChatMessage>) -> bool {
+    let mut total = estimated_history_tokens(history);
+    if total <= CHANNEL_CONTEXT_TOKEN_ESTIMATE_LIMIT {
+        return false;
+    }
+
+    let mut trimmed = false;
+    loop {
+        if total <= CHANNEL_CONTEXT_TOKEN_ESTIMATE_TARGET {
+            break;
+        }
+        let non_system = history.iter().filter(|m| m.role != "system").count();
+        if non_system <= CHANNEL_CONTEXT_MIN_KEEP_NON_SYSTEM_MESSAGES {
+            break;
+        }
+        let Some(idx) = history.iter().position(|m| m.role != "system") else {
+            break;
+        };
+        let removed = history.remove(idx);
+        total = total.saturating_sub(estimated_message_tokens(&removed));
+        trimmed = true;
+    }
+
+    trimmed
 }
 
 fn rollback_orphan_user_turn(
@@ -1823,9 +2028,9 @@ async fn get_or_create_provider(
 
     let provider = create_resilient_provider_nonblocking(
         provider_name,
-        ctx.api_key.clone(),
+        defaults.api_key.clone(),
         api_url.map(ToString::to_string),
-        ctx.reliability.as_ref().clone(),
+        defaults.reliability.clone(),
         ctx.provider_runtime_options.clone(),
     )
     .await?;
@@ -1861,6 +2066,31 @@ async fn create_resilient_provider_nonblocking(
     })
     .await
     .context("failed to join provider initialization task")?
+}
+
+async fn create_routed_provider_nonblocking(
+    provider_name: &str,
+    api_key: Option<String>,
+    api_url: Option<String>,
+    reliability: crate::config::ReliabilityConfig,
+    model_routes: Vec<crate::config::ModelRouteConfig>,
+    default_model: String,
+    provider_runtime_options: providers::ProviderRuntimeOptions,
+) -> anyhow::Result<Box<dyn Provider>> {
+    let provider_name = provider_name.to_string();
+    tokio::task::spawn_blocking(move || {
+        providers::create_routed_provider_with_options(
+            &provider_name,
+            api_key.as_deref(),
+            api_url.as_deref(),
+            &reliability,
+            &model_routes,
+            &default_model,
+            &provider_runtime_options,
+        )
+    })
+    .await
+    .context("failed to join routed provider initialization task")?
 }
 
 fn build_models_help_response(current: &ChannelRouteSelection, workspace_dir: &Path) -> String {
@@ -2109,6 +2339,27 @@ async fn handle_runtime_command_if_needed(
                 approval_message.push_str(&exclusion_note);
             }
             approval_message
+        }
+    }
+
+    /// Handle `/approve-allow <request-id>` for pending runtime execution prompts.
+    ///
+    /// This path confirms only the current pending request and intentionally does
+    /// not persist approval policy changes for normal tools.
+    async fn handle_pending_runtime_approval_side_effects(
+        ctx: &ChannelRuntimeContext,
+        request_id: &str,
+        tool_name: &str,
+    ) -> String {
+        if tool_name == APPROVAL_ALL_TOOLS_ONCE_TOKEN {
+            let remaining = ctx.approval_manager.grant_non_cli_allow_all_once();
+            format!(
+                "Approved one-time all-tools bypass from request `{request_id}`.\nApplies to the next non-CLI agent tool-execution turn only.\nThis bypass is runtime-only and does not persist to config.\nChannel exclusions from `autonomy.non_cli_excluded_tools` still apply.\nQueued one-time all-tools bypass tokens: `{remaining}`."
+            )
+        } else {
+            format!(
+                "Approved pending execution request `{request_id}` for `{tool_name}`.\nThis approval applies only to the current pending request and does not change persisted approval policy.\nTo persist approval for future requests, use `/approve {tool_name}` or the `/approve-request` + `/approve-confirm` flow."
+            )
         }
     }
 
@@ -2575,11 +2826,10 @@ async fn handle_runtime_command_if_needed(
                     Ok(req) => {
                         ctx.approval_manager
                             .record_non_cli_pending_resolution(&request_id, ApprovalResponse::Yes);
-                        let approval_message = handle_confirm_tool_approval_side_effects(
+                        let approval_message = handle_pending_runtime_approval_side_effects(
                             ctx,
                             &request_id,
                             &req.tool_name,
-                            source_channel,
                         )
                         .await;
                         runtime_trace::record_event(
@@ -3142,6 +3392,9 @@ async fn process_channel_message(
     msg: traits::ChannelMessage,
     cancellation_token: CancellationToken,
 ) {
+    let sender_id = msg.sender.as_str();
+    let channel_name = msg.channel.as_str();
+    tracing::debug!(sender_id, channel_name, "process_message called");
     if cancellation_token.is_cancelled() {
         return;
     }
@@ -3235,10 +3488,69 @@ or tune thresholds in config.",
     }
 
     let history_key = conversation_history_key(&msg);
-    // Try classification first, fall back to sender/default route
-    let route = classify_message_route(ctx.as_ref(), &msg.content)
-        .unwrap_or_else(|| get_route_selection(ctx.as_ref(), &history_key));
+    let conversation_lock = {
+        let mut locks = ctx.conversation_locks.lock().await;
+        locks
+            .entry(history_key.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+    let _conversation_guard = conversation_lock.lock().await;
+    let mut session: Option<Session> = None;
+    if let Some(manager) = ctx.session_manager.as_ref() {
+        let session_id = resolve_session_id(
+            &ctx.session_config,
+            msg.sender.as_str(),
+            Some(msg.channel.as_str()),
+        );
+        tracing::debug!(session_id, "session_id resolved");
+        match manager.get_or_create(&session_id).await {
+            Ok(opened) => {
+                session = Some(opened);
+            }
+            Err(err) => {
+                tracing::warn!("Failed to open session: {err}");
+            }
+        }
+    }
+
+    if let Some(session) = session.as_ref() {
+        let should_seed = {
+            let histories = ctx
+                .conversation_histories
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            !histories.contains_key(&history_key)
+        };
+
+        if should_seed {
+            match session.get_history().await {
+                Ok(history) => {
+                    tracing::debug!(history_len = history.len(), "session history loaded");
+                    let filtered: Vec<ChatMessage> = history
+                        .into_iter()
+                        .filter(|m| crate::providers::is_user_or_assistant_role(m.role.as_str()))
+                        .collect();
+                    let mut histories = ctx
+                        .conversation_histories
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    histories.entry(history_key.clone()).or_insert(filtered);
+                }
+                Err(err) => {
+                    tracing::warn!("Failed to load session history: {err}");
+                }
+            }
+        }
+    }
     let runtime_defaults = runtime_defaults_snapshot(ctx.as_ref());
+    // Try classification first, fall back to sender/default route.
+    let route = classify_message_route(
+        &runtime_defaults.query_classification,
+        &runtime_defaults.model_routes,
+        &msg.content,
+    )
+    .unwrap_or_else(|| get_route_selection(ctx.as_ref(), &history_key));
     let active_provider = match get_or_create_provider(ctx.as_ref(), &route.provider).await {
         Ok(provider) => provider,
         Err(err) => {
@@ -3258,7 +3570,9 @@ or tune thresholds in config.",
             return;
         }
     };
-    if ctx.auto_save_memory && msg.content.chars().count() >= AUTOSAVE_MIN_MESSAGE_CHARS {
+    if runtime_defaults.auto_save_memory
+        && msg.content.chars().count() >= AUTOSAVE_MIN_MESSAGE_CHARS
+    {
         let autosave_key = conversation_memory_key(&msg);
         let _ = ctx
             .memory
@@ -3321,7 +3635,7 @@ or tune thresholds in config.",
                 let memory_context = build_memory_context(
                     ctx.memory.as_ref(),
                     &msg.content,
-                    ctx.min_relevance_score,
+                    runtime_defaults.min_relevance_score,
                     Some(&history_key),
                 )
                 .await;
@@ -3334,6 +3648,8 @@ or tune thresholds in config.",
 
     let expose_internal_tool_details =
         msg.channel == "cli" || should_expose_internal_tool_details(&msg.content);
+    let progress_mode =
+        effective_progress_mode_for_message(msg.channel.as_str(), expose_internal_tool_details);
     let excluded_tools_snapshot = if msg.channel == "cli" {
         Vec::new()
     } else {
@@ -3352,6 +3668,7 @@ or tune thresholds in config.",
     ));
     let mut history = vec![ChatMessage::system(system_prompt)];
     history.extend(prior_turns);
+    let _ = trim_channel_prompt_history(&mut history);
     let use_streaming = target_channel
         .as_ref()
         .is_some_and(|ch| ch.supports_draft_updates());
@@ -3400,7 +3717,7 @@ or tune thresholds in config.",
         let channel = Arc::clone(channel_ref);
         let reply_target = msg.reply_target.clone();
         let draft_id = draft_id_ref.to_string();
-        let suppress_internal_progress = !expose_internal_tool_details;
+        let mode = progress_mode;
         Some(tokio::spawn(async move {
             let mut accumulated = String::new();
             while let Some(delta) = rx.recv().await {
@@ -3408,14 +3725,32 @@ or tune thresholds in config.",
                     accumulated.clear();
                     continue;
                 }
-                let (is_internal_progress, visible_delta) = split_internal_progress_delta(&delta);
-                if suppress_internal_progress && is_internal_progress {
-                    continue;
-                }
+                if let Some(block) =
+                    delta.strip_prefix(crate::agent::loop_::DRAFT_PROGRESS_BLOCK_SENTINEL)
+                {
+                    if mode == ProgressMode::Off {
+                        continue;
+                    }
+                    upsert_progress_section(&mut accumulated, block);
+                } else {
+                    let (is_internal_progress, visible_delta) =
+                        split_internal_progress_delta(&delta);
+                    if is_internal_progress {
+                        if mode == ProgressMode::Off {
+                            continue;
+                        }
+                        if mode == ProgressMode::Compact
+                            && is_verbose_only_progress_line(visible_delta)
+                        {
+                            continue;
+                        }
+                    }
 
-                accumulated.push_str(visible_delta);
+                    accumulated.push_str(visible_delta);
+                }
+                let display_text = strip_progress_section_markers(&accumulated);
                 if let Err(e) = channel
-                    .update_draft(&reply_target, &draft_id, &accumulated)
+                    .update_draft(&reply_target, &draft_id, &display_text)
                     .await
                 {
                     tracing::debug!("Draft update failed: {e}");
@@ -3454,35 +3789,91 @@ or tune thresholds in config.",
         Cancelled,
     }
 
-    let timeout_budget_secs =
-        channel_message_timeout_budget_secs(ctx.message_timeout_secs, ctx.max_tool_iterations);
+    let timeout_budget_secs = channel_message_timeout_budget_secs(
+        runtime_defaults.message_timeout_secs,
+        runtime_defaults.max_tool_iterations,
+    );
+    let cost_enforcement_context = crate::agent::loop_::create_cost_enforcement_context(
+        &runtime_defaults.cost,
+        ctx.workspace_dir.as_path(),
+    );
+
+    let (approval_prompt_tx, mut approval_prompt_rx) =
+        tokio::sync::mpsc::unbounded_channel::<NonCliApprovalPrompt>();
+    let non_cli_approval_context = if msg.channel != "cli" && target_channel.is_some() {
+        Some(NonCliApprovalContext {
+            sender: msg.sender.clone(),
+            reply_target: msg.reply_target.clone(),
+            prompt_tx: approval_prompt_tx,
+        })
+    } else {
+        drop(approval_prompt_tx);
+        None
+    };
+    let approval_prompt_dispatcher = if let (Some(channel_ref), true) =
+        (target_channel.as_ref(), non_cli_approval_context.is_some())
+    {
+        let channel = Arc::clone(channel_ref);
+        let reply_target = msg.reply_target.clone();
+        let thread_ts = msg.thread_ts.clone();
+        Some(tokio::spawn(async move {
+            while let Some(prompt) = approval_prompt_rx.recv().await {
+                if let Err(err) = channel
+                    .send_approval_prompt(
+                        &reply_target,
+                        &prompt.request_id,
+                        &prompt.tool_name,
+                        &prompt.arguments,
+                        thread_ts.clone(),
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to send non-CLI approval prompt for request {}: {err}",
+                        prompt.request_id
+                    );
+                }
+            }
+        }))
+    } else {
+        None
+    };
     let llm_result = tokio::select! {
         () = cancellation_token.cancelled() => LlmExecutionResult::Cancelled,
         result = tokio::time::timeout(
             Duration::from_secs(timeout_budget_secs),
-            run_tool_call_loop_with_reply_target(
-                active_provider.as_ref(),
-                &mut history,
-                ctx.tools_registry.as_ref(),
-                ctx.observer.as_ref(),
-                route.provider.as_str(),
-                route.model.as_str(),
-                runtime_defaults.temperature,
-                true,
-                Some(ctx.approval_manager.as_ref()),
-                msg.channel.as_str(),
-                Some(msg.reply_target.as_str()),
-                &ctx.multimodal,
-                ctx.max_tool_iterations,
-                Some(cancellation_token.clone()),
-                delta_tx,
-                ctx.hooks.as_deref(),
-                &excluded_tools_snapshot,
+            crate::agent::loop_::scope_cost_enforcement_context(
+                cost_enforcement_context,
+                run_tool_call_loop_with_non_cli_approval_context(
+                    active_provider.as_ref(),
+                    &mut history,
+                    ctx.tools_registry.as_ref(),
+                    ctx.observer.as_ref(),
+                    route.provider.as_str(),
+                    route.model.as_str(),
+                    runtime_defaults.temperature,
+                    true,
+                    Some(ctx.approval_manager.as_ref()),
+                    msg.channel.as_str(),
+                    non_cli_approval_context,
+                    &runtime_defaults.multimodal,
+                    runtime_defaults.max_tool_iterations,
+                    Some(cancellation_token.clone()),
+                    delta_tx,
+                    ctx.hooks.as_deref(),
+                    &excluded_tools_snapshot,
+                    progress_mode,
+                    ctx.safety_heartbeat.clone(),
+                    runtime_canary_tokens_snapshot(ctx.as_ref()),
+                ),
             ),
         ) => LlmExecutionResult::Completed(result),
     };
 
     if let Some(handle) = draft_updater {
+        let _ = handle.await;
+    }
+    if let Some(handle) = approval_prompt_dispatcher {
         let _ = handle.await;
     }
 
@@ -3646,7 +4037,7 @@ or tune thresholds in config.",
                 &history_key,
                 ChatMessage::assistant(&history_response),
             );
-            if ctx.auto_save_memory
+            if runtime_defaults.auto_save_memory
                 && delivered_response.chars().count() >= AUTOSAVE_MIN_MESSAGE_CHARS
             {
                 let assistant_key = assistant_memory_key(&msg);
@@ -3759,7 +4150,7 @@ or tune thresholds in config.",
                     }
                 }
             } else if is_tool_iteration_limit_error(&e) {
-                let limit = ctx.max_tool_iterations.max(1);
+                let limit = runtime_defaults.max_tool_iterations.max(1);
                 let pause_text = format!(
                     "⚠️ Reached tool-iteration limit ({limit}) for this turn. Context and progress were preserved. Reply \"continue\" to resume, or increase `agent.max_tool_iterations`."
                 );
@@ -3855,7 +4246,9 @@ or tune thresholds in config.",
         LlmExecutionResult::Completed(Err(_)) => {
             let timeout_msg = format!(
                 "LLM response timed out after {}s (base={}s, max_tool_iterations={})",
-                timeout_budget_secs, ctx.message_timeout_secs, ctx.max_tool_iterations
+                timeout_budget_secs,
+                runtime_defaults.message_timeout_secs,
+                runtime_defaults.max_tool_iterations
             );
             runtime_trace::record_event(
                 "channel_message_timeout",
@@ -3936,8 +4329,9 @@ async fn run_message_dispatch_loop(
         let task_sequence = Arc::clone(&task_sequence);
         workers.spawn(async move {
             let _permit = permit;
+            let runtime_defaults = runtime_defaults_snapshot(worker_ctx.as_ref());
             let interrupt_enabled =
-                worker_ctx.interrupt_on_new_message && msg.channel == "telegram";
+                runtime_defaults.interrupt_on_new_message && msg.channel == "telegram";
             let sender_scope_key = interruption_scope_key(&msg);
             let cancellation_token = CancellationToken::new();
             let completion = Arc::new(InFlightTaskCompletion::new());
@@ -3967,7 +4361,7 @@ async fn run_message_dispatch_loop(
                 }
             }
 
-            process_channel_message(worker_ctx, msg, cancellation_token).await;
+            Box::pin(process_channel_message(worker_ctx, msg, cancellation_token)).await;
 
             if interrupt_enabled {
                 let mut active = in_flight.lock().await;
@@ -4568,6 +4962,7 @@ fn collect_configured_channels(
             tg.ack_enabled,
         )
         .with_group_reply_allowed_senders(tg.group_reply_allowed_sender_ids())
+        .with_ack_reaction(config.channels_config.ack_reaction.telegram.clone())
         .with_streaming(tg.stream_mode, tg.draft_update_interval_ms)
         .with_transcription(config.transcription.clone())
         .with_workspace_dir(config.workspace_dir.clone());
@@ -4594,6 +4989,8 @@ fn collect_configured_channels(
                     dc.effective_group_reply_mode().requires_mention(),
                 )
                 .with_group_reply_allowed_senders(dc.group_reply_allowed_sender_ids())
+                .with_ack_reaction(config.channels_config.ack_reaction.discord.clone())
+                .with_transcription(config.transcription.clone())
                 .with_workspace_dir(config.workspace_dir.clone()),
             ),
         });
@@ -4607,6 +5004,7 @@ fn collect_configured_channels(
                     sl.bot_token.clone(),
                     sl.app_token.clone(),
                     sl.channel_id.clone(),
+                    sl.channel_ids.clone(),
                     sl.allowed_users.clone(),
                 )
                 .with_group_reply_policy(
@@ -4819,13 +5217,19 @@ fn collect_configured_channels(
                 );
                 channels.push(ConfiguredChannel {
                     display_name: "Feishu",
-                    channel: Arc::new(LarkChannel::from_config(lk)),
+                    channel: Arc::new(
+                        LarkChannel::from_config(lk)
+                            .with_ack_reaction(config.channels_config.ack_reaction.feishu.clone()),
+                    ),
                 });
             }
         } else {
             channels.push(ConfiguredChannel {
                 display_name: "Lark",
-                channel: Arc::new(LarkChannel::from_lark_config(lk)),
+                channel: Arc::new(
+                    LarkChannel::from_lark_config(lk)
+                        .with_ack_reaction(config.channels_config.ack_reaction.lark.clone()),
+                ),
             });
         }
     }
@@ -4834,14 +5238,23 @@ fn collect_configured_channels(
     if let Some(ref fs) = config.channels_config.feishu {
         channels.push(ConfiguredChannel {
             display_name: "Feishu",
-            channel: Arc::new(LarkChannel::from_feishu_config(fs)),
+            channel: Arc::new(
+                LarkChannel::from_feishu_config(fs)
+                    .with_ack_reaction(config.channels_config.ack_reaction.feishu.clone()),
+            ),
         });
     }
 
     #[cfg(not(feature = "channel-lark"))]
     if config.channels_config.lark.is_some() || config.channels_config.feishu.is_some() {
+        let executable = std::env::current_exe()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| "<unknown>".to_string());
         tracing::warn!(
-            "Lark/Feishu channel is configured but this build was compiled without `channel-lark`; skipping Lark/Feishu health check."
+            "Lark/Feishu channel is configured but this binary was compiled without `channel-lark`; skipping Lark/Feishu startup. \
+             binary={executable}. \
+             If you built from source, run the built artifact directly (for example `./target/release/zeroclaw daemon`) \
+             or run `cargo run --features channel-lark -- daemon`."
         );
     }
 
@@ -4994,7 +5407,12 @@ pub async fn start_channels(config: Config) -> Result<()> {
     // Ensure stale channel handles are never reused across restarts.
     clear_live_channels();
 
+    if let Err(error) = crate::plugins::runtime::initialize_from_config(&config.plugins) {
+        tracing::warn!("plugin registry initialization skipped: {error}");
+    }
+
     let provider_name = resolved_default_provider(&config);
+    let model = resolved_default_model(&config);
     let provider_runtime_options = providers::ProviderRuntimeOptions {
         auth_profile_override: None,
         provider_api_url: config.api_url.clone(),
@@ -5004,15 +5422,18 @@ pub async fn start_channels(config: Config) -> Result<()> {
         reasoning_enabled: config.runtime.reasoning_enabled,
         reasoning_level: config.effective_provider_reasoning_level(),
         custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
+        custom_provider_auth_header: config.effective_custom_provider_auth_header(),
         max_tokens_override: None,
         model_support_vision: config.model_support_vision,
     };
     let provider: Arc<dyn Provider> = Arc::from(
-        create_resilient_provider_nonblocking(
+        create_routed_provider_nonblocking(
             &provider_name,
             config.api_key.clone(),
             config.api_url.clone(),
             config.reliability.clone(),
+            config.model_routes.clone(),
+            model.clone(),
             provider_runtime_options.clone(),
         )
         .await?,
@@ -5035,20 +5456,23 @@ pub async fn start_channels(config: Config) -> Result<()> {
                 defaults: runtime_defaults_from_config(&config),
                 perplexity_filter: config.security.perplexity_filter.clone(),
                 outbound_leak_guard: config.security.outbound_leak_guard.clone(),
+                canary_tokens: config.security.canary_tokens,
                 last_applied_stamp: initial_stamp,
             },
         );
     }
 
-    let observer: Arc<dyn Observer> =
+    let base_observer: Arc<dyn Observer> =
         Arc::from(observability::create_observer(&config.observability));
+    let observer: Arc<dyn Observer> = Arc::new(
+        crate::plugins::bridge::observer::ObserverBridge::new(base_observer),
+    );
     let runtime: Arc<dyn runtime::RuntimeAdapter> =
         Arc::from(runtime::create_runtime(&config.runtime)?);
     let security = Arc::new(SecurityPolicy::from_config(
         &config.autonomy,
         &config.workspace_dir,
     ));
-    let model = resolved_default_model(&config);
     let temperature = config.default_temperature;
     let mem: Arc<dyn Memory> = Arc::from(memory::create_memory_with_storage(
         &config.memory,
@@ -5339,6 +5763,16 @@ pub async fn start_channels(config: Config) -> Result<()> {
         .telegram
         .as_ref()
         .is_some_and(|tg| tg.interrupt_on_new_message);
+    let telegram_progress_mode = config
+        .channels_config
+        .telegram
+        .as_ref()
+        .map(|tg| tg.progress_mode)
+        .unwrap_or_default();
+    set_runtime_telegram_progress_mode(telegram_progress_mode);
+
+    let session_manager = shared_session_manager(&config.agent.session, &config.workspace_dir)?
+        .map(|mgr| mgr as Arc<dyn SessionManager + Send + Sync>);
 
     let runtime_ctx = Arc::new(ChannelRuntimeContext {
         channels_by_name,
@@ -5354,6 +5788,9 @@ pub async fn start_channels(config: Config) -> Result<()> {
         max_tool_iterations: config.agent.max_tool_iterations,
         min_relevance_score: config.memory.min_relevance_score,
         conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+        conversation_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        session_config: config.agent.session.clone(),
+        session_manager,
         provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
         route_overrides: Arc::new(Mutex::new(HashMap::new())),
         api_key: config.api_key.clone(),
@@ -5364,15 +5801,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
         message_timeout_secs,
         interrupt_on_new_message,
         multimodal: config.multimodal.clone(),
-        hooks: if config.hooks.enabled {
-            let mut runner = crate::hooks::HookRunner::new();
-            if config.hooks.builtin.command_logger {
-                runner.register(Box::new(crate::hooks::builtin::CommandLoggerHook::new()));
-            }
-            Some(Arc::new(runner))
-        } else {
-            None
-        },
+        hooks: crate::hooks::create_runner_from_config(&config.hooks),
         non_cli_excluded_tools: Arc::new(Mutex::new(
             config.autonomy.non_cli_excluded_tools.clone(),
         )),
@@ -5381,18 +5810,10 @@ pub async fn start_channels(config: Config) -> Result<()> {
         // Preserve startup perplexity filter config to ensure policy is not weakened
         // when runtime store lookup misses.
         startup_perplexity_filter: config.security.perplexity_filter.clone(),
-        // WASM skill tools are sandboxed by the WASM engine and cannot access the
-        // host filesystem, network, or shell. Pre-approve them so they are not
-        // denied on non-CLI channels (which have no interactive stdin to prompt).
         approval_manager: {
-            let mut autonomy = config.autonomy.clone();
-            let skills_dir = workspace.join("skills");
-            for name in tools::wasm_tool::wasm_tool_names_from_skills(&skills_dir) {
-                if !autonomy.auto_approve.contains(&name) {
-                    autonomy.auto_approve.push(name);
-                }
-            }
-            Arc::new(ApprovalManager::from_config(&autonomy))
+            // Keep approval policy provenance-bound to static config. Do not
+            // auto-approve tool names from untrusted manifest files.
+            Arc::new(ApprovalManager::from_config(&config.autonomy))
         },
         safety_heartbeat: if config.agent.safety_heartbeat_interval > 0 {
             Some(SafetyHeartbeatConfig {
@@ -5417,11 +5838,13 @@ pub async fn start_channels(config: Config) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::large_futures)]
 mod tests {
     use super::*;
     use crate::memory::{Memory, MemoryCategory, SqliteMemory};
     use crate::observability::NoopObserver;
     use crate::providers::{ChatMessage, Provider};
+    use crate::security::AutonomyLevel;
     use crate::tools::{Tool, ToolResult};
     use std::collections::{HashMap, HashSet};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -5725,6 +6148,9 @@ mod tests {
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(histories)),
+            conversation_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -5779,6 +6205,9 @@ mod tests {
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -5836,6 +6265,9 @@ mod tests {
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(histories)),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -5891,6 +6323,11 @@ mod tests {
         stop_typing_calls: AtomicUsize,
         reactions_added: tokio::sync::Mutex<Vec<(String, String, String)>>,
         reactions_removed: tokio::sync::Mutex<Vec<(String, String, String)>>,
+    }
+
+    #[derive(Default)]
+    struct QqRecordingChannel {
+        sent_messages: tokio::sync::Mutex<Vec<String>>,
     }
 
     #[derive(Default)]
@@ -6045,6 +6482,36 @@ mod tests {
                 message_id.to_string(),
                 emoji.to_string(),
             ));
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Channel for QqRecordingChannel {
+        fn name(&self) -> &str {
+            "qq"
+        }
+
+        async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
+            self.sent_messages
+                .lock()
+                .await
+                .push(format!("{}:{}", message.recipient, message.content));
+            Ok(())
+        }
+
+        async fn listen(
+            &self,
+            _tx: tokio::sync::mpsc::Sender<traits::ChannelMessage>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn start_typing(&self, _recipient: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn stop_typing(&self, _recipient: &str) -> anyhow::Result<()> {
             Ok(())
         }
     }
@@ -6389,6 +6856,36 @@ BTC is currently around $65,000 based on latest tool output."#
         }
     }
 
+    struct MockProcessTool;
+
+    #[async_trait::async_trait]
+    impl Tool for MockProcessTool {
+        fn name(&self) -> &str {
+            "process"
+        }
+
+        fn description(&self) -> &str {
+            "Mock process tool for runtime visibility tests"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string" }
+                }
+            })
+        }
+
+        async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
+            Ok(ToolResult {
+                success: true,
+                output: String::new(),
+                error: None,
+            })
+        }
+    }
+
     #[test]
     fn build_runtime_tool_visibility_prompt_respects_excluded_snapshot() {
         let tools: Vec<Box<dyn Tool>> = vec![Box::new(MockPriceTool), Box::new(MockEchoTool)];
@@ -6405,6 +6902,23 @@ BTC is currently around $65,000 based on latest tool output."#
         assert!(native.contains("Runtime Tool Availability (Authoritative)"));
         assert!(native.contains("native provider function-calling"));
         assert!(!native.contains("## Tool Use Protocol"));
+    }
+
+    #[test]
+    fn build_runtime_tool_visibility_prompt_excludes_process_with_default_policy() {
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(MockProcessTool), Box::new(MockEchoTool)];
+        let excluded = crate::config::AutonomyConfig::default().non_cli_excluded_tools;
+
+        assert!(
+            excluded.contains(&"process".to_string()),
+            "default non-CLI exclusion list must include process"
+        );
+
+        let prompt = build_runtime_tool_visibility_prompt(&tools, &excluded, false);
+        assert!(prompt.contains("Excluded by runtime policy:"));
+        assert!(prompt.contains("process"));
+        assert!(!prompt.contains("**process**:"));
+        assert!(prompt.contains("`mock_echo`"));
     }
 
     #[tokio::test]
@@ -6434,6 +6948,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -6497,6 +7014,13 @@ BTC is currently around $65,000 based on latest tool output."#
         let mut channels_by_name = HashMap::new();
         channels_by_name.insert(channel.name().to_string(), channel);
 
+        let autonomy_cfg = crate::config::AutonomyConfig {
+            level: AutonomyLevel::Full,
+            auto_approve: vec!["mock_price".to_string()],
+            ..crate::config::AutonomyConfig::default()
+        };
+        let _approval_manager = Arc::new(ApprovalManager::from_config(&autonomy_cfg));
+
         let runtime_ctx = Arc::new(ChannelRuntimeContext {
             channels_by_name: Arc::new(channels_by_name),
             provider: Arc::new(ToolCallingProvider),
@@ -6511,6 +7035,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 10,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -6561,6 +7088,13 @@ BTC is currently around $65,000 based on latest tool output."#
         let mut channels_by_name = HashMap::new();
         channels_by_name.insert(channel.name().to_string(), channel);
 
+        let autonomy_cfg = crate::config::AutonomyConfig {
+            level: AutonomyLevel::Full,
+            auto_approve: vec!["mock_price".to_string()],
+            ..crate::config::AutonomyConfig::default()
+        };
+        let _approval_manager = Arc::new(ApprovalManager::from_config(&autonomy_cfg));
+
         let runtime_ctx = Arc::new(ChannelRuntimeContext {
             channels_by_name: Arc::new(channels_by_name),
             provider: Arc::new(ToolCallingProvider),
@@ -6575,6 +7109,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 10,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -6639,6 +7176,13 @@ BTC is currently around $65,000 based on latest tool output."#
         let mut channels_by_name = HashMap::new();
         channels_by_name.insert(channel.name().to_string(), channel);
 
+        let autonomy_cfg = crate::config::AutonomyConfig {
+            level: AutonomyLevel::Full,
+            auto_approve: vec!["mock_price".to_string()],
+            ..crate::config::AutonomyConfig::default()
+        };
+        let _approval_manager = Arc::new(ApprovalManager::from_config(&autonomy_cfg));
+
         let runtime_ctx = Arc::new(ChannelRuntimeContext {
             channels_by_name: Arc::new(channels_by_name),
             provider: Arc::new(ToolCallingProvider),
@@ -6653,6 +7197,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 10,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -6716,6 +7263,13 @@ BTC is currently around $65,000 based on latest tool output."#
         let mut channels_by_name = HashMap::new();
         channels_by_name.insert(channel.name().to_string(), channel);
 
+        let autonomy_cfg = crate::config::AutonomyConfig {
+            level: AutonomyLevel::Full,
+            auto_approve: vec!["mock_price".to_string()],
+            ..crate::config::AutonomyConfig::default()
+        };
+        let _approval_manager = Arc::new(ApprovalManager::from_config(&autonomy_cfg));
+
         let runtime_ctx = Arc::new(ChannelRuntimeContext {
             channels_by_name: Arc::new(channels_by_name),
             provider: Arc::new(ToolCallingProvider),
@@ -6730,6 +7284,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 10,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -6799,6 +7356,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 10,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -6849,6 +7409,13 @@ BTC is currently around $65,000 based on latest tool output."#
         let mut channels_by_name = HashMap::new();
         channels_by_name.insert(channel.name().to_string(), channel);
 
+        let autonomy_cfg = crate::config::AutonomyConfig {
+            level: AutonomyLevel::Full,
+            auto_approve: vec!["mock_price".to_string()],
+            ..crate::config::AutonomyConfig::default()
+        };
+        let _approval_manager = Arc::new(ApprovalManager::from_config(&autonomy_cfg));
+
         let runtime_ctx = Arc::new(ChannelRuntimeContext {
             channels_by_name: Arc::new(channels_by_name),
             provider: Arc::new(ToolCallingAliasProvider),
@@ -6863,6 +7430,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 10,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -6936,6 +7506,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -7037,6 +7610,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -7138,6 +7714,320 @@ BTC is currently around $65,000 based on latest tool output."#
     }
 
     #[tokio::test]
+    async fn process_channel_message_handles_approve_allow_command_without_llm_call() {
+        let channel_impl = Arc::new(TelegramRecordingChannel::default());
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+
+        let mut channels_by_name = HashMap::new();
+        channels_by_name.insert(channel.name().to_string(), channel);
+
+        let provider_impl = Arc::new(ModelCaptureProvider::default());
+        let provider: Arc<dyn Provider> = provider_impl.clone();
+        let mut provider_cache_seed: HashMap<String, Arc<dyn Provider>> = HashMap::new();
+        provider_cache_seed.insert("test-provider".to_string(), Arc::clone(&provider));
+
+        let approval_manager = Arc::new(ApprovalManager::from_config(
+            &crate::config::AutonomyConfig::default(),
+        ));
+        let pending = approval_manager.create_non_cli_pending_request(
+            "mock_price",
+            "alice",
+            "telegram",
+            "chat-1",
+            None,
+        );
+
+        let runtime_ctx = Arc::new(ChannelRuntimeContext {
+            channels_by_name: Arc::new(channels_by_name),
+            provider: Arc::clone(&provider),
+            default_provider: Arc::new("test-provider".to_string()),
+            memory: Arc::new(NoopMemory),
+            tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+            observer: Arc::new(NoopObserver),
+            system_prompt: Arc::new("test-system-prompt".to_string()),
+            model: Arc::new("default-model".to_string()),
+            temperature: 0.0,
+            auto_save_memory: false,
+            max_tool_iterations: 5,
+            min_relevance_score: 0.0,
+            conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
+            provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
+            route_overrides: Arc::new(Mutex::new(HashMap::new())),
+            api_key: None,
+            api_url: None,
+            reliability: Arc::new(crate::config::ReliabilityConfig::default()),
+            provider_runtime_options: providers::ProviderRuntimeOptions::default(),
+            workspace_dir: Arc::new(std::env::temp_dir()),
+            message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+            interrupt_on_new_message: false,
+            multimodal: crate::config::MultimodalConfig::default(),
+            hooks: None,
+            non_cli_excluded_tools: Arc::new(Mutex::new(Vec::new())),
+            query_classification: crate::config::QueryClassificationConfig::default(),
+            model_routes: Vec::new(),
+            approval_manager: Arc::clone(&approval_manager),
+            safety_heartbeat: None,
+            startup_perplexity_filter: crate::config::PerplexityFilterConfig::default(),
+        });
+
+        process_channel_message(
+            runtime_ctx,
+            traits::ChannelMessage {
+                id: "msg-approve-allow-1".to_string(),
+                sender: "alice".to_string(),
+                reply_target: "chat-1".to_string(),
+                content: format!("/approve-allow {}", pending.request_id),
+                channel: "telegram".to_string(),
+                timestamp: 1,
+                thread_ts: None,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        let sent = channel_impl.sent_messages.lock().await;
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].contains("Approved pending execution request"));
+        assert!(sent[0].contains("mock_price"));
+        drop(sent);
+
+        assert_eq!(
+            approval_manager.take_non_cli_pending_resolution(&pending.request_id),
+            Some(ApprovalResponse::Yes)
+        );
+        assert!(!approval_manager.has_non_cli_pending_request(&pending.request_id));
+        assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn process_channel_message_handles_approve_deny_command_without_llm_call() {
+        let channel_impl = Arc::new(TelegramRecordingChannel::default());
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+
+        let mut channels_by_name = HashMap::new();
+        channels_by_name.insert(channel.name().to_string(), channel);
+
+        let provider_impl = Arc::new(ModelCaptureProvider::default());
+        let provider: Arc<dyn Provider> = provider_impl.clone();
+        let mut provider_cache_seed: HashMap<String, Arc<dyn Provider>> = HashMap::new();
+        provider_cache_seed.insert("test-provider".to_string(), Arc::clone(&provider));
+
+        let approval_manager = Arc::new(ApprovalManager::from_config(
+            &crate::config::AutonomyConfig::default(),
+        ));
+        let pending = approval_manager.create_non_cli_pending_request(
+            "mock_price",
+            "alice",
+            "telegram",
+            "chat-1",
+            None,
+        );
+
+        let runtime_ctx = Arc::new(ChannelRuntimeContext {
+            channels_by_name: Arc::new(channels_by_name),
+            provider: Arc::clone(&provider),
+            default_provider: Arc::new("test-provider".to_string()),
+            memory: Arc::new(NoopMemory),
+            tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+            observer: Arc::new(NoopObserver),
+            system_prompt: Arc::new("test-system-prompt".to_string()),
+            model: Arc::new("default-model".to_string()),
+            temperature: 0.0,
+            auto_save_memory: false,
+            max_tool_iterations: 5,
+            min_relevance_score: 0.0,
+            conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
+            provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
+            route_overrides: Arc::new(Mutex::new(HashMap::new())),
+            api_key: None,
+            api_url: None,
+            reliability: Arc::new(crate::config::ReliabilityConfig::default()),
+            provider_runtime_options: providers::ProviderRuntimeOptions::default(),
+            workspace_dir: Arc::new(std::env::temp_dir()),
+            message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+            interrupt_on_new_message: false,
+            multimodal: crate::config::MultimodalConfig::default(),
+            hooks: None,
+            non_cli_excluded_tools: Arc::new(Mutex::new(Vec::new())),
+            query_classification: crate::config::QueryClassificationConfig::default(),
+            model_routes: Vec::new(),
+            approval_manager: Arc::clone(&approval_manager),
+            safety_heartbeat: None,
+            startup_perplexity_filter: crate::config::PerplexityFilterConfig::default(),
+        });
+
+        process_channel_message(
+            runtime_ctx,
+            traits::ChannelMessage {
+                id: "msg-approve-deny-1".to_string(),
+                sender: "alice".to_string(),
+                reply_target: "chat-1".to_string(),
+                content: format!("/approve-deny {}", pending.request_id),
+                channel: "telegram".to_string(),
+                timestamp: 1,
+                thread_ts: None,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        let sent = channel_impl.sent_messages.lock().await;
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].contains("Rejected approval request"));
+        assert!(sent[0].contains("mock_price"));
+        drop(sent);
+
+        assert_eq!(
+            approval_manager.take_non_cli_pending_resolution(&pending.request_id),
+            Some(ApprovalResponse::No)
+        );
+        assert!(!approval_manager.has_non_cli_pending_request(&pending.request_id));
+        assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn process_channel_message_prompts_and_waits_for_non_cli_always_ask_approval() {
+        let channel_impl = Arc::new(TelegramRecordingChannel::default());
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+
+        let mut channels_by_name = HashMap::new();
+        channels_by_name.insert(channel.name().to_string(), channel);
+
+        let autonomy_cfg = crate::config::AutonomyConfig {
+            always_ask: vec!["mock_price".to_string()],
+            ..crate::config::AutonomyConfig::default()
+        };
+
+        let runtime_ctx = Arc::new(ChannelRuntimeContext {
+            channels_by_name: Arc::new(channels_by_name),
+            provider: Arc::new(ToolCallingProvider),
+            default_provider: Arc::new("test-provider".to_string()),
+            memory: Arc::new(NoopMemory),
+            tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+            observer: Arc::new(NoopObserver),
+            system_prompt: Arc::new("test-system-prompt".to_string()),
+            model: Arc::new("test-model".to_string()),
+            temperature: 0.0,
+            auto_save_memory: false,
+            max_tool_iterations: 10,
+            min_relevance_score: 0.0,
+            conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
+            provider_cache: Arc::new(Mutex::new(HashMap::new())),
+            route_overrides: Arc::new(Mutex::new(HashMap::new())),
+            api_key: None,
+            api_url: None,
+            reliability: Arc::new(crate::config::ReliabilityConfig::default()),
+            provider_runtime_options: providers::ProviderRuntimeOptions::default(),
+            workspace_dir: Arc::new(std::env::temp_dir()),
+            message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+            interrupt_on_new_message: false,
+            multimodal: crate::config::MultimodalConfig::default(),
+            hooks: None,
+            non_cli_excluded_tools: Arc::new(Mutex::new(Vec::new())),
+            query_classification: crate::config::QueryClassificationConfig::default(),
+            model_routes: Vec::new(),
+            approval_manager: Arc::new(ApprovalManager::from_config(&autonomy_cfg)),
+            safety_heartbeat: None,
+            startup_perplexity_filter: crate::config::PerplexityFilterConfig::default(),
+        });
+
+        let runtime_ctx_for_first_turn = runtime_ctx.clone();
+        let first_turn = tokio::spawn(async move {
+            process_channel_message(
+                runtime_ctx_for_first_turn,
+                traits::ChannelMessage {
+                    id: "msg-non-cli-approval-1".to_string(),
+                    sender: "alice".to_string(),
+                    reply_target: "chat-1".to_string(),
+                    content: "What is the BTC price now?".to_string(),
+                    channel: "telegram".to_string(),
+                    timestamp: 1,
+                    thread_ts: None,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+        });
+
+        let request_id = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let pending = runtime_ctx.approval_manager.list_non_cli_pending_requests(
+                    Some("alice"),
+                    Some("telegram"),
+                    Some("chat-1"),
+                );
+                if let Some(req) = pending.first() {
+                    break req.request_id.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("pending approval request should be created for always_ask tool");
+
+        process_channel_message(
+            runtime_ctx.clone(),
+            traits::ChannelMessage {
+                id: "msg-non-cli-approval-2".to_string(),
+                sender: "alice".to_string(),
+                reply_target: "chat-1".to_string(),
+                content: format!("/approve-allow {request_id}"),
+                channel: "telegram".to_string(),
+                timestamp: 2,
+                thread_ts: None,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        tokio::time::timeout(Duration::from_secs(5), first_turn)
+            .await
+            .expect("first channel turn should finish after approval")
+            .expect("first channel turn task should not panic");
+
+        let sent = channel_impl.sent_messages.lock().await;
+        assert!(
+            sent.iter()
+                .any(|entry| entry.contains("Approval required for tool `mock_price`")),
+            "channel should emit non-cli approval prompt"
+        );
+        assert!(
+            sent.iter()
+                .any(|entry| entry.contains("Approved pending execution request")),
+            "channel should acknowledge explicit approval command"
+        );
+        assert!(
+            sent.iter()
+                .any(|entry| entry.contains("BTC is currently around")),
+            "tool call should execute after approval and produce final response"
+        );
+        assert!(
+            sent.iter().all(|entry| !entry.contains("Denied by user.")),
+            "always_ask tool should not be silently denied once non-cli approval prompt path is wired"
+        );
+        assert!(
+            runtime_ctx.approval_manager.needs_approval("mock_price"),
+            "/approve-allow should not downgrade always_ask policy for future requests"
+        );
+        assert!(
+            runtime_ctx
+                .approval_manager
+                .always_ask_tools()
+                .contains("mock_price"),
+            "always_ask runtime policy should remain intact after one-shot approval"
+        );
+    }
+
+    #[tokio::test]
     async fn process_channel_message_denies_approval_management_for_unlisted_sender() {
         let channel_impl = Arc::new(TelegramRecordingChannel::default());
         let channel: Arc<dyn Channel> = channel_impl.clone();
@@ -7189,6 +8079,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -7301,6 +8194,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -7408,6 +8304,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -7500,6 +8399,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -7536,7 +8438,7 @@ BTC is currently around $65,000 based on latest tool output."#
 
         let sent = channel_impl.sent_messages.lock().await;
         assert_eq!(sent.len(), 1);
-        assert!(sent[0].contains("Approved supervised execution for `mock_price`"));
+        assert!(sent[0].contains("Approved pending execution request"));
         assert!(sent[0].contains("mock_price"));
         drop(sent);
 
@@ -7546,6 +8448,14 @@ BTC is currently around $65,000 based on latest tool output."#
         assert_eq!(
             approval_manager.take_non_cli_pending_resolution(&request_id),
             Some(ApprovalResponse::Yes)
+        );
+        assert!(
+            approval_manager.needs_approval("mock_price"),
+            "/approve-allow should not persistently auto-approve tools"
+        );
+        assert!(
+            approval_manager.always_ask_tools().contains("mock_price"),
+            "always_ask tool should remain in always_ask after one-shot approval"
         );
         assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 0);
     }
@@ -7591,6 +8501,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -7688,6 +8601,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -7697,7 +8613,7 @@ BTC is currently around $65,000 based on latest tool output."#
                 zeroclaw_dir: Some(temp.path().to_path_buf()),
                 ..providers::ProviderRuntimeOptions::default()
             },
-            workspace_dir: Arc::new(std::env::temp_dir()),
+            workspace_dir: Arc::new(temp.path().join("workspace")),
             message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
@@ -7836,6 +8752,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -7930,6 +8849,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -8077,6 +8999,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -8194,6 +9119,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -8291,6 +9219,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -8410,6 +9341,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -8527,6 +9461,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(route_overrides)),
             api_key: None,
@@ -8603,6 +9540,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -8671,9 +9611,19 @@ BTC is currently around $65,000 based on latest tool output."#
                         api_key: None,
                         api_url: None,
                         reliability: crate::config::ReliabilityConfig::default(),
+                        cost: crate::config::CostConfig::default(),
+                        auto_save_memory: false,
+                        max_tool_iterations: 5,
+                        min_relevance_score: 0.0,
+                        message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+                        interrupt_on_new_message: false,
+                        multimodal: crate::config::MultimodalConfig::default(),
+                        query_classification: crate::config::QueryClassificationConfig::default(),
+                        model_routes: Vec::new(),
                     },
                     perplexity_filter: crate::config::PerplexityFilterConfig::default(),
                     outbound_leak_guard: crate::config::OutboundLeakGuardConfig::default(),
+                    canary_tokens: true,
                     last_applied_stamp: None,
                 },
             );
@@ -8693,6 +9643,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -8850,6 +9803,13 @@ BTC is currently around $65,000 based on latest tool output."#
         cfg.default_provider = Some("ollama".to_string());
         cfg.default_model = Some("llama3.2".to_string());
         cfg.api_key = Some("http://127.0.0.1:11434".to_string());
+        cfg.memory.auto_save = false;
+        cfg.memory.min_relevance_score = 0.15;
+        cfg.agent.max_tool_iterations = 5;
+        cfg.channels_config.message_timeout_secs = 45;
+        cfg.multimodal.allow_remote_fetch = false;
+        cfg.query_classification.enabled = false;
+        cfg.model_routes = vec![];
         cfg.autonomy.non_cli_natural_language_approval_mode =
             crate::config::NonCliNaturalLanguageApprovalMode::Direct;
         cfg.autonomy.non_cli_excluded_tools = vec!["shell".to_string()];
@@ -8870,6 +9830,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: Some("http://127.0.0.1:11434".to_string()),
@@ -8913,6 +9876,14 @@ BTC is currently around $65,000 based on latest tool output."#
             runtime_outbound_leak_guard_snapshot(runtime_ctx.as_ref()).action,
             crate::config::OutboundLeakGuardAction::Redact
         );
+        let defaults = runtime_defaults_snapshot(runtime_ctx.as_ref());
+        assert!(!defaults.auto_save_memory);
+        assert_eq!(defaults.min_relevance_score, 0.15);
+        assert_eq!(defaults.max_tool_iterations, 5);
+        assert_eq!(defaults.message_timeout_secs, 45);
+        assert!(!defaults.multimodal.allow_remote_fetch);
+        assert!(!defaults.query_classification.enabled);
+        assert!(defaults.model_routes.is_empty());
 
         cfg.autonomy.non_cli_natural_language_approval_mode =
             crate::config::NonCliNaturalLanguageApprovalMode::Disabled;
@@ -8928,6 +9899,28 @@ BTC is currently around $65,000 based on latest tool output."#
         cfg.security.perplexity_filter.perplexity_threshold = 12.5;
         cfg.security.outbound_leak_guard.action = crate::config::OutboundLeakGuardAction::Block;
         cfg.security.outbound_leak_guard.sensitivity = 0.92;
+        cfg.memory.auto_save = true;
+        cfg.memory.min_relevance_score = 0.65;
+        cfg.agent.max_tool_iterations = 11;
+        cfg.channels_config.message_timeout_secs = 120;
+        cfg.multimodal.allow_remote_fetch = true;
+        cfg.query_classification.enabled = true;
+        cfg.query_classification.rules = vec![crate::config::ClassificationRule {
+            hint: "reasoning".to_string(),
+            keywords: vec!["analyze".to_string()],
+            patterns: vec!["deep".to_string()],
+            min_length: None,
+            max_length: None,
+            priority: 10,
+        }];
+        cfg.model_routes = vec![crate::config::ModelRouteConfig {
+            hint: "reasoning".to_string(),
+            provider: "openrouter".to_string(),
+            model: "openai/gpt-5.2".to_string(),
+            max_tokens: Some(512),
+            api_key: None,
+            transport: None,
+        }];
         cfg.save().await.expect("save updated config");
 
         maybe_apply_runtime_config_update(runtime_ctx.as_ref())
@@ -8959,11 +9952,54 @@ BTC is currently around $65,000 based on latest tool output."#
             crate::config::OutboundLeakGuardAction::Block
         );
         assert_eq!(leak_guard_cfg.sensitivity, 0.92);
+        let defaults = runtime_defaults_snapshot(runtime_ctx.as_ref());
+        assert!(defaults.auto_save_memory);
+        assert_eq!(defaults.min_relevance_score, 0.65);
+        assert_eq!(defaults.max_tool_iterations, 11);
+        assert_eq!(defaults.message_timeout_secs, 120);
+        assert!(defaults.multimodal.allow_remote_fetch);
+        assert!(defaults.query_classification.enabled);
+        assert_eq!(defaults.query_classification.rules.len(), 1);
+        assert_eq!(defaults.model_routes.len(), 1);
 
         let mut store = runtime_config_store()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         store.remove(&config_path);
+    }
+
+    #[tokio::test]
+    async fn start_channels_uses_model_routes_when_global_provider_key_is_missing() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let workspace_dir = temp.path().join("workspace");
+        std::fs::create_dir_all(&workspace_dir).expect("workspace dir");
+
+        let mut cfg = Config::default();
+        cfg.workspace_dir = workspace_dir;
+        cfg.config_path = temp.path().join("config.toml");
+        cfg.default_provider = None;
+        cfg.api_key = None;
+        cfg.default_model = Some("hint:fast".to_string());
+        cfg.model_routes = vec![crate::config::ModelRouteConfig {
+            hint: "fast".to_string(),
+            provider: "openai-codex".to_string(),
+            model: "gpt-5.3-codex".to_string(),
+            max_tokens: Some(512),
+            api_key: Some("route-specific-key".to_string()),
+            transport: Some("sse".to_string()),
+        }];
+
+        let config_path = cfg.config_path.clone();
+        let result = start_channels(cfg).await;
+        let mut store = runtime_config_store()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        store.remove(&config_path);
+
+        assert!(
+            result.is_ok(),
+            "start_channels should support routed providers without global credentials: {result:?}"
+        );
     }
 
     #[tokio::test]
@@ -8990,6 +10026,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 12,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -9055,6 +10094,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 3,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -9232,6 +10274,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 10,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -9319,6 +10364,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 10,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -9418,6 +10466,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 10,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -9499,6 +10550,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 10,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -9565,6 +10619,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 10,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -10193,6 +11250,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -10263,6 +11323,102 @@ BTC is currently around $65,000 based on latest tool output."#
     }
 
     #[tokio::test]
+    async fn process_channel_message_qq_keeps_history_across_distinct_message_ids() {
+        let channel_impl = Arc::new(QqRecordingChannel::default());
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+
+        let mut channels_by_name = HashMap::new();
+        channels_by_name.insert(channel.name().to_string(), channel);
+
+        let provider_impl = Arc::new(HistoryCaptureProvider::default());
+
+        let runtime_ctx = Arc::new(ChannelRuntimeContext {
+            channels_by_name: Arc::new(channels_by_name),
+            provider: provider_impl.clone(),
+            default_provider: Arc::new("test-provider".to_string()),
+            memory: Arc::new(NoopMemory),
+            tools_registry: Arc::new(vec![]),
+            observer: Arc::new(NoopObserver),
+            system_prompt: Arc::new("test-system-prompt".to_string()),
+            model: Arc::new("test-model".to_string()),
+            temperature: 0.0,
+            auto_save_memory: false,
+            max_tool_iterations: 5,
+            min_relevance_score: 0.0,
+            conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
+            provider_cache: Arc::new(Mutex::new(HashMap::new())),
+            route_overrides: Arc::new(Mutex::new(HashMap::new())),
+            api_key: None,
+            api_url: None,
+            reliability: Arc::new(crate::config::ReliabilityConfig::default()),
+            provider_runtime_options: providers::ProviderRuntimeOptions::default(),
+            workspace_dir: Arc::new(std::env::temp_dir()),
+            message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+            interrupt_on_new_message: false,
+            multimodal: crate::config::MultimodalConfig::default(),
+            hooks: None,
+            non_cli_excluded_tools: Arc::new(Mutex::new(Vec::new())),
+            query_classification: crate::config::QueryClassificationConfig::default(),
+            model_routes: Vec::new(),
+            approval_manager: Arc::new(ApprovalManager::from_config(
+                &crate::config::AutonomyConfig::default(),
+            )),
+            safety_heartbeat: None,
+            startup_perplexity_filter: crate::config::PerplexityFilterConfig::default(),
+        });
+
+        process_channel_message(
+            runtime_ctx.clone(),
+            traits::ChannelMessage {
+                id: "msg-a".to_string(),
+                sender: "alice".to_string(),
+                reply_target: "group:1".to_string(),
+                content: "hello".to_string(),
+                channel: "qq".to_string(),
+                timestamp: 1,
+                thread_ts: Some("msg-1".to_string()),
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        process_channel_message(
+            runtime_ctx,
+            traits::ChannelMessage {
+                id: "msg-b".to_string(),
+                sender: "alice".to_string(),
+                reply_target: "group:1".to_string(),
+                content: "follow up".to_string(),
+                channel: "qq".to_string(),
+                timestamp: 2,
+                thread_ts: Some("msg-2".to_string()),
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        let calls = provider_impl
+            .calls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].len(), 2);
+        assert_eq!(calls[0][0].0, "system");
+        assert_eq!(calls[0][1].0, "user");
+        assert_eq!(calls[1].len(), 4);
+        assert_eq!(calls[1][0].0, "system");
+        assert_eq!(calls[1][1].0, "user");
+        assert_eq!(calls[1][2].0, "assistant");
+        assert_eq!(calls[1][3].0, "user");
+        assert!(calls[1][1].1.contains("hello"));
+        assert!(calls[1][2].1.contains("response-1"));
+        assert!(calls[1][3].1.contains("follow up"));
+    }
+
+    #[tokio::test]
     async fn process_channel_message_enriches_current_turn_without_persisting_context() {
         let channel_impl = Arc::new(RecordingChannel::default());
         let channel: Arc<dyn Channel> = channel_impl.clone();
@@ -10285,6 +11441,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -10381,6 +11540,9 @@ BTC is currently around $65,000 based on latest tool output."#
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(histories)),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -10560,6 +11722,42 @@ Done reminder set for 1:38 AM."#;
     }
 
     #[test]
+    fn effective_progress_mode_defaults_non_telegram_to_off() {
+        assert_eq!(
+            effective_progress_mode_for_message("draft-streaming-channel", false),
+            ProgressMode::Off
+        );
+        assert_eq!(
+            effective_progress_mode_for_message("draft-streaming-channel", true),
+            ProgressMode::Verbose
+        );
+    }
+
+    #[test]
+    fn effective_progress_mode_uses_telegram_runtime_setting() {
+        set_runtime_telegram_progress_mode(ProgressMode::Compact);
+        assert_eq!(
+            effective_progress_mode_for_message("telegram", false),
+            ProgressMode::Compact
+        );
+        set_runtime_telegram_progress_mode(ProgressMode::Off);
+        assert_eq!(
+            effective_progress_mode_for_message("telegram", false),
+            ProgressMode::Off
+        );
+    }
+
+    #[test]
+    fn upsert_progress_section_replaces_existing_block() {
+        let mut text = String::new();
+        upsert_progress_section(&mut text, "⏳ shell: ls\n");
+        upsert_progress_section(&mut text, "✅ shell (1s)\n");
+        let stripped = strip_progress_section_markers(&text);
+        assert!(!stripped.contains("⏳ shell: ls"));
+        assert!(stripped.contains("✅ shell (1s)"));
+    }
+
+    #[test]
     fn build_channel_system_prompt_includes_visibility_policy() {
         let hidden = build_channel_system_prompt("base", "telegram", "chat", false);
         assert!(hidden.contains("run tools/functions in the background"));
@@ -10567,6 +11765,16 @@ Done reminder set for 1:38 AM."#;
 
         let exposed = build_channel_system_prompt("base", "telegram", "chat", true);
         assert!(exposed.contains("user explicitly requested command/tool details"));
+    }
+
+    #[test]
+    fn build_channel_system_prompt_refreshes_datetime_section() {
+        let base_prompt =
+            "## Current Date & Time\n\n2000-01-01 00:00:00 (UTC)\n\n## Runtime\n\nHost: test";
+        let rendered = build_channel_system_prompt(base_prompt, "telegram", "chat", false);
+        assert!(!rendered.contains("2000-01-01 00:00:00 (UTC)"));
+        assert!(rendered.contains("## Current Date & Time\n\n"));
+        assert!(rendered.contains("## Runtime\n\nHost: test"));
     }
 
     #[test]
@@ -11160,6 +12368,9 @@ BTC is currently around $65,000 based on latest tool output."#;
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
@@ -11233,6 +12444,9 @@ BTC is currently around $65,000 based on latest tool output."#;
             max_tool_iterations: 5,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            conversation_locks: Default::default(),
+            session_config: crate::config::AgentSessionConfig::default(),
+            session_manager: None,
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
             route_overrides: Arc::new(Mutex::new(HashMap::new())),
             api_key: None,
