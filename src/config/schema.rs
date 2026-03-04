@@ -4106,7 +4106,7 @@ impl FeishuConfig {
 // ── Security Config ─────────────────────────────────────────────────
 
 /// Security configuration for sandboxing, resource limits, and audit logging
-#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SecurityConfig {
     /// Sandbox configuration
     #[serde(default)]
@@ -4131,6 +4131,47 @@ pub struct SecurityConfig {
     /// Syscall anomaly detection profile for daemon shell/process execution.
     #[serde(default)]
     pub syscall_anomaly: SyscallAnomalyConfig,
+
+    /// Enable per-turn canary token injection to detect context exfiltration.
+    #[serde(default = "default_true")]
+    pub canary_tokens: bool,
+
+    /// Enable semantic prompt-injection guard backed by vector similarity.
+    #[serde(default)]
+    pub semantic_guard: bool,
+
+    /// Collection name used by semantic guard in the vector store.
+    #[serde(default = "default_semantic_guard_collection")]
+    pub semantic_guard_collection: String,
+
+    /// Similarity threshold (0.0-1.0) used to block semantic prompt-injection matches.
+    #[serde(default = "default_semantic_guard_threshold")]
+    pub semantic_guard_threshold: f64,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            sandbox: SandboxConfig::default(),
+            resources: ResourceLimitsConfig::default(),
+            audit: AuditConfig::default(),
+            otp: OtpConfig::default(),
+            estop: EstopConfig::default(),
+            syscall_anomaly: SyscallAnomalyConfig::default(),
+            canary_tokens: default_true(),
+            semantic_guard: false,
+            semantic_guard_collection: default_semantic_guard_collection(),
+            semantic_guard_threshold: default_semantic_guard_threshold(),
+        }
+    }
+}
+
+fn default_semantic_guard_collection() -> String {
+    "semantic_guard".to_string()
+}
+
+fn default_semantic_guard_threshold() -> f64 {
+    0.82
 }
 
 /// OTP validation strategy.
@@ -5808,6 +5849,12 @@ impl Config {
                     "security.syscall_anomaly.baseline_syscalls[{i}] contains invalid characters: {normalized}"
                 );
             }
+        }
+        if self.security.semantic_guard_collection.trim().is_empty() {
+            anyhow::bail!("security.semantic_guard_collection must not be empty");
+        }
+        if !(0.0..=1.0).contains(&self.security.semantic_guard_threshold) {
+            anyhow::bail!("security.semantic_guard_threshold must be between 0.0 and 1.0");
         }
 
         // Scheduler
@@ -9930,6 +9977,10 @@ default_temperature = 0.7
         assert!(parsed.security.syscall_anomaly.enabled);
         assert!(parsed.security.syscall_anomaly.alert_on_unknown_syscall);
         assert!(!parsed.security.syscall_anomaly.baseline_syscalls.is_empty());
+        assert!(parsed.security.canary_tokens);
+        assert!(!parsed.security.semantic_guard);
+        assert_eq!(parsed.security.semantic_guard_collection, "semantic_guard");
+        assert!((parsed.security.semantic_guard_threshold - 0.82).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -9939,6 +9990,12 @@ default_temperature = 0.7
 default_provider = "openrouter"
 default_model = "anthropic/claude-sonnet-4.6"
 default_temperature = 0.7
+
+[security]
+canary_tokens = false
+semantic_guard = true
+semantic_guard_collection = "semantic_guard_custom"
+semantic_guard_threshold = 0.91
 
 [security.otp]
 enabled = true
@@ -9984,6 +10041,13 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         assert_eq!(parsed.security.syscall_anomaly.baseline_syscalls.len(), 4);
         assert_eq!(parsed.security.otp.gated_actions.len(), 2);
         assert_eq!(parsed.security.otp.gated_domains.len(), 2);
+        assert!(!parsed.security.canary_tokens);
+        assert!(parsed.security.semantic_guard);
+        assert_eq!(
+            parsed.security.semantic_guard_collection,
+            "semantic_guard_custom"
+        );
+        assert!((parsed.security.semantic_guard_threshold - 0.91).abs() < f64::EPSILON);
         parsed.validate().unwrap();
     }
 
@@ -10075,6 +10139,32 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         assert!(err
             .to_string()
             .contains("max_denied_events_per_minute must be less than or equal"));
+    }
+
+    #[test]
+    async fn security_validation_rejects_empty_semantic_guard_collection() {
+        let mut config = Config::default();
+        config.security.semantic_guard_collection = "   ".to_string();
+
+        let err = config
+            .validate()
+            .expect_err("expected semantic_guard_collection validation failure");
+        assert!(err
+            .to_string()
+            .contains("security.semantic_guard_collection"));
+    }
+
+    #[test]
+    async fn security_validation_rejects_invalid_semantic_guard_threshold() {
+        let mut config = Config::default();
+        config.security.semantic_guard_threshold = 1.5;
+
+        let err = config
+            .validate()
+            .expect_err("expected semantic_guard_threshold validation failure");
+        assert!(err
+            .to_string()
+            .contains("security.semantic_guard_threshold"));
     }
 
     #[test]

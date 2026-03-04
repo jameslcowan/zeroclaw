@@ -2913,6 +2913,93 @@ async fn process_channel_message(
         return;
     }
 
+    let mut canary_enabled_for_turn = false;
+    if !msg.content.trim_start().starts_with('/') {
+        let semantic_cfg = if let Some(config_path) = runtime_config_path(ctx.as_ref()) {
+            match tokio::fs::read_to_string(&config_path).await {
+                Ok(contents) => match toml::from_str::<Config>(&contents) {
+                    Ok(mut cfg) => {
+                        cfg.config_path = config_path;
+                        cfg.apply_env_overrides();
+                        Some((
+                            cfg.security.canary_tokens,
+                            cfg.security.semantic_guard,
+                            cfg.security.semantic_guard_collection,
+                            cfg.security.semantic_guard_threshold,
+                            cfg.memory,
+                            cfg.api_key,
+                        ))
+                    }
+                    Err(err) => {
+                        tracing::debug!("semantic guard: failed to parse runtime config: {err}");
+                        None
+                    }
+                },
+                Err(err) => {
+                    tracing::debug!("semantic guard: failed to read runtime config: {err}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        if let Some((
+            canary_enabled,
+            semantic_enabled,
+            semantic_collection,
+            semantic_threshold,
+            memory_cfg,
+            api_key,
+        )) = semantic_cfg
+        {
+            canary_enabled_for_turn = canary_enabled;
+            if semantic_enabled {
+                let semantic_guard = crate::security::SemanticGuard::from_config(
+                    &memory_cfg,
+                    semantic_enabled,
+                    semantic_collection.as_str(),
+                    semantic_threshold,
+                    api_key.as_deref(),
+                );
+                if let Some(detection) = semantic_guard.detect(&msg.content).await {
+                    runtime_trace::record_event(
+                        "channel_message_blocked_semantic_guard",
+                        Some(msg.channel.as_str()),
+                        None,
+                        None,
+                        None,
+                        Some(false),
+                        Some("blocked by semantic prompt-injection guard"),
+                        serde_json::json!({
+                            "sender": msg.sender,
+                            "message_id": msg.id,
+                            "score": detection.score,
+                            "threshold": semantic_threshold,
+                            "category": detection.category,
+                            "collection": semantic_collection,
+                        }),
+                    );
+
+                    if let Some(channel) = target_channel.as_ref() {
+                        let warning = format!(
+                            "Request blocked by `security.semantic_guard` before provider execution.\n\
+semantic_match={:.2} (threshold {:.2}), category={}.",
+                            detection.score, semantic_threshold, detection.category
+                        );
+                        let _ = channel
+                            .send(
+                                &SendMessage::new(warning, &msg.reply_target)
+                                    .in_thread(msg.thread_ts.clone()),
+                            )
+                            .await;
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
     let history_key = conversation_history_key(&msg);
     // Try classification first, fall back to sender/default route
     let route = classify_message_route(ctx.as_ref(), &msg.content)
@@ -3012,6 +3099,8 @@ async fn process_channel_message(
         &excluded_tools_snapshot,
         active_provider.supports_native_tools(),
     ));
+    let canary_guard = crate::security::CanaryGuard::new(canary_enabled_for_turn);
+    let (system_prompt, turn_canary_token) = canary_guard.inject_turn_token(&system_prompt);
     let mut history = vec![ChatMessage::system(system_prompt)];
     history.extend(prior_turns);
     let use_streaming = target_channel
@@ -3237,6 +3326,24 @@ async fn process_channel_message(
         LlmExecutionResult::Completed(Ok(Ok(response))) => {
             // ── Hook: on_message_sending (modifying) ─────────
             let mut outbound_response = response;
+            if canary_guard
+                .response_contains_canary(&outbound_response, turn_canary_token.as_deref())
+            {
+                runtime_trace::record_event(
+                    "channel_message_blocked_canary_guard",
+                    Some(msg.channel.as_str()),
+                    Some(route.provider.as_str()),
+                    Some(route.model.as_str()),
+                    None,
+                    Some(false),
+                    Some("blocked response containing per-turn canary token"),
+                    serde_json::json!({
+                        "sender": msg.sender,
+                        "message_id": msg.id,
+                    }),
+                );
+                outbound_response = "I blocked that response because it attempted to reveal protected internal context.".to_string();
+            }
             if let Some(hooks) = &ctx.hooks {
                 match hooks
                     .run_on_message_sending(
