@@ -117,11 +117,14 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
                 tokio::select! {
                     result = tokio::signal::ctrl_c() => {
                         if let Err(e) = result {
-                            tracing::error!("Failed to listen for SIGINT: {e}");
+                            bail!("Failed to listen for SIGINT: {e}");
                         }
                         tracing::info!("Received SIGINT, initiating graceful shutdown");
                     }
-                    _ = sigterm.recv() => {
+                    sigterm_event = sigterm.recv() => {
+                        if sigterm_event.is_none() {
+                            bail!("SIGTERM listener closed unexpectedly");
+                        }
                         tracing::info!("Received SIGTERM, initiating graceful shutdown");
                     }
                 }
