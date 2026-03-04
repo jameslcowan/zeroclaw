@@ -1721,15 +1721,17 @@ fn create_provider_with_url_and_options(
             )))
         }
         "litellm" | "lite-llm" => {
+            let descriptor =
+                get_provider_descriptor("litellm").expect("litellm descriptor must exist");
             let base_url = api_url
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .unwrap_or(LITELLM_BASE_URL);
+                .unwrap_or(descriptor.base_url.unwrap_or(LITELLM_BASE_URL));
             Ok(Box::new(OpenAiCompatibleProvider::new(
-                "LiteLLM",
+                descriptor.display_name,
                 base_url,
                 key,
-                AuthStyle::Bearer,
+                descriptor.auth_style.clone(),
             )))
         }
         "osaurus" => {
