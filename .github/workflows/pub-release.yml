@@ -465,7 +465,6 @@ jobs:
 
     build-docker:
         name: Build and Push Docker Image
-        if: needs.prepare.outputs.publish_release == 'true'
         needs: [prepare]
         runs-on: [self-hosted, Linux, X64, aws-india, blacksmith-2vcpu-ubuntu-2404, hetzner]
         timeout-minutes: 90
@@ -531,15 +530,17 @@ jobs:
               uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
               with:
                   context: .
-                  push: true
+                  push: ${{ needs.prepare.outputs.publish_release == 'true' }}
+                  load: ${{ needs.prepare.outputs.publish_release != 'true' }}
                   build-args: |
                       ZEROCLAW_CARGO_ALL_FEATURES=true
                   tags: ${{ steps.meta.outputs.tags }}
-                  platforms: linux/amd64,linux/arm64
+                  platforms: ${{ needs.prepare.outputs.publish_release == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
                   cache-from: type=gha
                   cache-to: type=gha,mode=max
 
             - name: Set GHCR package visibility to public
+              if: needs.prepare.outputs.publish_release == 'true'
               shell: bash
               env:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -575,6 +576,7 @@ jobs:
                   echo "::warning::Unable to update GHCR visibility via API in this run; proceeding to GHCR publish contract verification."
 
             - name: Validate GHCR publish contract
+              if: needs.prepare.outputs.publish_release == 'true'
               shell: bash
               run: |
                   set -euo pipefail
@@ -589,7 +591,7 @@ jobs:
                     --fail-on-violation
 
             - name: Emit GHCR publish contract audit event
-              if: always()
+              if: always() && needs.prepare.outputs.publish_release == 'true'
               shell: bash
               run: |
                   set -euo pipefail
@@ -603,7 +605,7 @@ jobs:
                   fi
 
             - name: Publish GHCR contract summary
-              if: always()
+              if: always() && needs.prepare.outputs.publish_release == 'true'
               shell: bash
               run: |
                   set -euo pipefail
@@ -612,7 +614,7 @@ jobs:
                   fi
 
             - name: Upload GHCR publish contract artifacts
-              if: always()
+              if: always() && needs.prepare.outputs.publish_release == 'true'
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
                   name: ghcr-publish-contract
@@ -624,6 +626,7 @@ jobs:
                   retention-days: 21
 
             - name: Scan published image for vulnerabilities (Trivy)
+              if: needs.prepare.outputs.publish_release == 'true'
               shell: bash
               run: |
                   set -euo pipefail
@@ -687,6 +690,7 @@ jobs:
                   ls -1 "$SARIF_OUT" "$TABLE_OUT" "$JSON_OUT" "$SHA_TABLE_OUT" "$SHA_JSON_OUT" "$LATEST_TABLE_OUT" "$LATEST_JSON_OUT"
 
             - name: Validate GHCR vulnerability gate
+              if: needs.prepare.outputs.publish_release == 'true'
               shell: bash
               run: |
                   set -euo pipefail
@@ -703,7 +707,7 @@ jobs:
                     --fail-on-violation
 
             - name: Emit GHCR vulnerability gate audit event
-              if: always()
+              if: always() && needs.prepare.outputs.publish_release == 'true'
               shell: bash
               run: |
                   set -euo pipefail
@@ -717,7 +721,7 @@ jobs:
                   fi
 
             - name: Publish GHCR vulnerability summary
-              if: always()
+              if: always() && needs.prepare.outputs.publish_release == 'true'
               shell: bash
               run: |
                   set -euo pipefail
@@ -726,7 +730,7 @@ jobs:
                   fi
 
             - name: Upload GHCR vulnerability gate artifacts
-              if: always()
+              if: always() && needs.prepare.outputs.publish_release == 'true'
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
                   name: ghcr-vulnerability-gate
@@ -739,7 +743,7 @@ jobs:
 
             - name: Detect Trivy SARIF report
               id: trivy-sarif
-              if: always()
+              if: always() && needs.prepare.outputs.publish_release == 'true'
               shell: bash
               run: |
                   set -euo pipefail
@@ -752,14 +756,14 @@ jobs:
                   fi
 
             - name: Upload Trivy SARIF
-              if: always() && steps.trivy-sarif.outputs.exists == 'true'
+              if: always() && needs.prepare.outputs.publish_release == 'true' && steps.trivy-sarif.outputs.exists == 'true'
               uses: github/codeql-action/upload-sarif@89a39a4e59826350b863aa6b6252a07ad50cf83e # v4
               with:
                   sarif_file: artifacts/trivy-${{ steps.meta.outputs.release_tag }}.sarif
                   category: ghcr-trivy
 
             - name: Upload Trivy report artifacts
-              if: always()
+              if: always() && needs.prepare.outputs.publish_release == 'true'
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
                   name: ghcr-trivy-report
