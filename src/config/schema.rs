@@ -7125,6 +7125,95 @@ fn decrypt_channel_secrets(
     Ok(())
 }
 
+fn parse_telegram_allowed_users_env_value(
+    raw_value: &str,
+    env_name: &str,
+    field_name: &str,
+) -> Result<Vec<String>> {
+    let trimmed = raw_value.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("{field_name} env reference ${{env:{env_name}}} resolved to an empty value");
+    }
+
+    let mut resolved: Vec<String> = Vec::new();
+    if trimmed.starts_with('[') {
+        let parsed: serde_json::Value = serde_json::from_str(trimmed).with_context(|| {
+            format!(
+                "{field_name} env reference ${{env:{env_name}}} must be valid JSON array or comma-separated list"
+            )
+        })?;
+        let items = parsed.as_array().with_context(|| {
+            format!("{field_name} env reference ${{env:{env_name}}} must be a JSON array")
+        })?;
+        for (idx, item) in items.iter().enumerate() {
+            let candidate = match item {
+                serde_json::Value::String(v) => v.trim().to_string(),
+                serde_json::Value::Number(v) => v.to_string(),
+                _ => {
+                    anyhow::bail!(
+                        "{field_name} env reference ${{env:{env_name}}}[{idx}] must be string or number"
+                    );
+                }
+            };
+            if !candidate.is_empty() {
+                resolved.push(candidate);
+            }
+        }
+    } else {
+        resolved.extend(
+            trimmed
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string),
+        );
+    }
+
+    if resolved.is_empty() {
+        anyhow::bail!("{field_name} env reference ${{env:{env_name}}} produced no user IDs");
+    }
+
+    Ok(resolved)
+}
+
+fn resolve_telegram_allowed_users_env_refs(channels: &mut ChannelsConfig) -> Result<()> {
+    let Some(telegram) = channels.telegram.as_mut() else {
+        return Ok(());
+    };
+
+    let field_name = "config.channels_config.telegram.allowed_users";
+    let mut expanded_allowed_users: Vec<String> = Vec::new();
+    for (idx, raw_entry) in telegram.allowed_users.drain(..).enumerate() {
+        let entry = raw_entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+
+        if let Some(env_expr) = entry
+            .strip_prefix("${env:")
+            .and_then(|value| value.strip_suffix('}'))
+        {
+            let env_name = env_expr.trim();
+            if !is_valid_env_var_name(env_name) {
+                anyhow::bail!(
+                    "{field_name}[{idx}] has invalid env var name ({env_name}); expected [A-Za-z_][A-Za-z0-9_]*"
+                );
+            }
+            let env_value = std::env::var(env_name).with_context(|| {
+                format!("{field_name}[{idx}] references unset environment variable {env_name}")
+            })?;
+            let mut parsed =
+                parse_telegram_allowed_users_env_value(&env_value, env_name, field_name)?;
+            expanded_allowed_users.append(&mut parsed);
+        } else {
+            expanded_allowed_users.push(entry.to_string());
+        }
+    }
+
+    telegram.allowed_users = expanded_allowed_users;
+    Ok(())
+}
+
 fn encrypt_channel_secrets(
     store: &crate::security::SecretStore,
     channels: &mut ChannelsConfig,
@@ -7656,6 +7745,7 @@ impl Config {
             }
 
             decrypt_channel_secrets(&store, &mut config.channels_config)?;
+            resolve_telegram_allowed_users_env_refs(&mut config.channels_config)?;
 
             config.apply_env_overrides();
             config.validate()?;
@@ -10860,6 +10950,107 @@ denied_tools = ["shell"]
         assert_eq!(parsed.stream_mode, StreamMode::Partial);
         assert_eq!(parsed.draft_update_interval_ms, 500);
         assert!(parsed.interrupt_on_new_message);
+    }
+
+    #[test]
+    async fn telegram_allowed_users_env_ref_expands_comma_list() {
+        let env_name = "ZEROCLAW_TEST_TELEGRAM_ALLOWED_USERS_CSV";
+        std::env::set_var(env_name, "1001, 1002, *");
+
+        let mut channels = ChannelsConfig::default();
+        channels.telegram = Some(TelegramConfig {
+            bot_token: "123:XYZ".into(),
+            allowed_users: vec![format!("${{env:{env_name}}}")],
+            stream_mode: StreamMode::Off,
+            draft_update_interval_ms: 1000,
+            interrupt_on_new_message: false,
+            mention_only: false,
+            progress_mode: ProgressMode::default(),
+            group_reply: None,
+            base_url: None,
+            ack_enabled: true,
+        });
+
+        let result = resolve_telegram_allowed_users_env_refs(&mut channels);
+        std::env::remove_var(env_name);
+        result.expect("env reference should expand");
+
+        let telegram = channels.telegram.expect("telegram config should exist");
+        assert_eq!(telegram.allowed_users, vec!["1001", "1002", "*"]);
+    }
+
+    #[test]
+    async fn telegram_allowed_users_env_ref_expands_json_array() {
+        let env_name = "ZEROCLAW_TEST_TELEGRAM_ALLOWED_USERS_JSON";
+        std::env::set_var(env_name, r#"["1001", 1002, "*"]"#);
+
+        let mut channels = ChannelsConfig::default();
+        channels.telegram = Some(TelegramConfig {
+            bot_token: "123:XYZ".into(),
+            allowed_users: vec![format!("${{env:{env_name}}}")],
+            stream_mode: StreamMode::Off,
+            draft_update_interval_ms: 1000,
+            interrupt_on_new_message: false,
+            mention_only: false,
+            progress_mode: ProgressMode::default(),
+            group_reply: None,
+            base_url: None,
+            ack_enabled: true,
+        });
+
+        let result = resolve_telegram_allowed_users_env_refs(&mut channels);
+        std::env::remove_var(env_name);
+        result.expect("JSON env reference should expand");
+
+        let telegram = channels.telegram.expect("telegram config should exist");
+        assert_eq!(telegram.allowed_users, vec!["1001", "1002", "*"]);
+    }
+
+    #[test]
+    async fn telegram_allowed_users_env_ref_missing_var_fails() {
+        let env_name = "ZEROCLAW_TEST_TELEGRAM_ALLOWED_USERS_MISSING";
+        std::env::remove_var(env_name);
+
+        let mut channels = ChannelsConfig::default();
+        channels.telegram = Some(TelegramConfig {
+            bot_token: "123:XYZ".into(),
+            allowed_users: vec![format!("${{env:{env_name}}}")],
+            stream_mode: StreamMode::Off,
+            draft_update_interval_ms: 1000,
+            interrupt_on_new_message: false,
+            mention_only: false,
+            progress_mode: ProgressMode::default(),
+            group_reply: None,
+            base_url: None,
+            ack_enabled: true,
+        });
+
+        let err = resolve_telegram_allowed_users_env_refs(&mut channels)
+            .expect_err("unset env var should fail");
+        let message = err.to_string();
+        assert!(message.contains("allowed_users"));
+        assert!(message.contains(env_name));
+    }
+
+    #[test]
+    async fn telegram_allowed_users_env_ref_invalid_env_name_fails() {
+        let mut channels = ChannelsConfig::default();
+        channels.telegram = Some(TelegramConfig {
+            bot_token: "123:XYZ".into(),
+            allowed_users: vec!["${env:NOT VALID}".to_string()],
+            stream_mode: StreamMode::Off,
+            draft_update_interval_ms: 1000,
+            interrupt_on_new_message: false,
+            mention_only: false,
+            progress_mode: ProgressMode::default(),
+            group_reply: None,
+            base_url: None,
+            ack_enabled: true,
+        });
+
+        let err = resolve_telegram_allowed_users_env_refs(&mut channels)
+            .expect_err("invalid env var name should fail");
+        assert!(err.to_string().contains("invalid env var name"));
     }
 
     #[test]
