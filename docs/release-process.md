@@ -177,3 +177,4 @@ If prerelease/canary lanes fail:
 - Keep release changes small and reversible.
 - Prefer one release issue/checklist per version so handoff is clear.
 - Avoid publishing from ad-hoc feature branches.
+- Optional: enable automated release updates by setting repository variable `RELEASE_UPDATES_ISSUE_NUMBER` to an issue number. The `Release Updates Feed` workflow will post a summary comment to that issue whenever a release is published.

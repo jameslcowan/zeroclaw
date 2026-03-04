@@ -1,0 +1,84 @@
+name: Release Updates Feed
+
+on:
+    release:
+        types: [published]
+    workflow_dispatch:
+        inputs:
+            release_tag:
+                description: "Existing release tag (for manual repost), e.g. v0.1.2"
+                required: false
+                default: ""
+                type: string
+
+permissions:
+    contents: read
+    issues: write
+
+env:
+    GIT_CONFIG_COUNT: "1"
+    GIT_CONFIG_KEY_0: core.hooksPath
+    GIT_CONFIG_VALUE_0: /dev/null
+
+jobs:
+    publish-update:
+        name: Publish Release Update
+        runs-on: [self-hosted, Linux, X64, aws-india, blacksmith-2vcpu-ubuntu-2404, hetzner]
+        steps:
+            - name: Publish release update summary
+              uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+              env:
+                  RELEASE_UPDATES_ISSUE_NUMBER: ${{ vars.RELEASE_UPDATES_ISSUE_NUMBER }}
+                  RELEASE_TAG_INPUT: ${{ inputs.release_tag || '' }}
+              with:
+                  script: |
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+
+                      let release = context.payload.release;
+                      if (!release) {
+                        const tag = process.env.RELEASE_TAG_INPUT || '';
+                        if (!tag) {
+                          core.setFailed('workflow_dispatch requires release_tag when no release payload is present.');
+                          return;
+                        }
+                        const fetched = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+                        release = fetched.data;
+                      }
+
+                      const notesRaw = (release.body || 'No release notes provided.').trim();
+                      const maxNotesLength = 3500;
+                      const notes = notesRaw.length > maxNotesLength
+                        ? `${notesRaw.slice(0, maxNotesLength)}\n\n...`
+                        : notesRaw;
+
+                      const update = [
+                        `## Release ${release.tag_name}`,
+                        `- Published: ${release.published_at || release.created_at || 'unknown'}`,
+                        `- Author: @${release.author?.login || 'unknown'}`,
+                        `- Link: ${release.html_url}`,
+                        `- Target commit-ish: \`${release.target_commitish || 'unknown'}\``,
+                        '',
+                        '### Release Notes',
+                        notes,
+                      ].join('\n');
+
+                      const issueNumberRaw = (process.env.RELEASE_UPDATES_ISSUE_NUMBER || '').trim();
+                      const issueNumber = Number.parseInt(issueNumberRaw, 10);
+
+                      if (Number.isInteger(issueNumber) && issueNumber > 0) {
+                        await github.rest.issues.createComment({
+                          owner,
+                          repo,
+                          issue_number: issueNumber,
+                          body: update,
+                        });
+                        core.info(`Posted release update to issue #${issueNumber}.`);
+                      } else {
+                        core.notice('RELEASE_UPDATES_ISSUE_NUMBER is not set; skipping issue comment.');
+                      }
+
+                      await core.summary
+                        .addHeading(`Release Update Published: ${release.tag_name}`)
+                        .addRaw(update)
+                        .write();
