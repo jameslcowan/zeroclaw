@@ -1,8 +1,6 @@
 name: Pub Docker Img
 
 on:
-    push:
-        tags: ["v*"]
     pull_request:
         branches: [dev, main]
         paths:

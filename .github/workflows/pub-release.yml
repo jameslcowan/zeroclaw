@@ -35,7 +35,8 @@ concurrency:
 
 permissions:
     contents: write
-    packages: read
+    packages: write
+    security-events: write
     id-token: write # Required for cosign keyless signing via OIDC
 
 env:
@@ -43,6 +44,8 @@ env:
     GIT_CONFIG_KEY_0: core.hooksPath
     GIT_CONFIG_VALUE_0: /dev/null
     CARGO_TERM_COLOR: always
+    REGISTRY: ghcr.io
+    IMAGE_NAME: ${{ github.repository }}
 
 jobs:
     prepare:
@@ -460,6 +463,317 @@ jobs:
                   path: zeroclaw-${{ matrix.target }}.${{ matrix.archive_ext }}
                   retention-days: 7
 
+    build-docker:
+        name: Build and Push Docker Image
+        if: needs.prepare.outputs.publish_release == 'true'
+        needs: [prepare]
+        runs-on: [self-hosted, Linux, X64, aws-india, blacksmith-2vcpu-ubuntu-2404, hetzner]
+        timeout-minutes: 90
+        outputs:
+            release_tag: ${{ steps.meta.outputs.release_tag }}
+            release_sha: ${{ steps.meta.outputs.release_sha }}
+            sha_tag: ${{ steps.meta.outputs.sha_tag }}
+            latest_tag: ${{ steps.meta.outputs.latest_tag }}
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+              with:
+                  ref: ${{ needs.prepare.outputs.release_ref }}
+
+            - name: Resolve Docker API version
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  server_api="$(docker version --format '{{.Server.APIVersion}}')"
+                  min_api="$(docker version --format '{{.Server.MinAPIVersion}}' 2>/dev/null || true)"
+                  if [[ -z "${server_api}" || "${server_api}" == "<no value>" ]]; then
+                    echo "::error::Unable to detect Docker server API version."
+                    docker version || true
+                    exit 1
+                  fi
+                  echo "DOCKER_API_VERSION=${server_api}" >> "$GITHUB_ENV"
+                  echo "Using Docker API version ${server_api} (server min: ${min_api:-unknown})"
+
+            - name: Setup Buildx
+              uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+            - name: Log in to Container Registry
+              uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Compute tags
+              id: meta
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+                  RELEASE_TAG="${{ needs.prepare.outputs.release_tag }}"
+                  RELEASE_SHA="$(git rev-parse HEAD)"
+                  SHA_SUFFIX="sha-${RELEASE_SHA::12}"
+                  SHA_TAG="${IMAGE}:${SHA_SUFFIX}"
+                  LATEST_SUFFIX="latest"
+                  LATEST_TAG="${IMAGE}:${LATEST_SUFFIX}"
+                  VERSION_TAG="${IMAGE}:${RELEASE_TAG}"
+                  TAGS="${VERSION_TAG},${SHA_TAG},${LATEST_TAG}"
+
+                  {
+                    echo "tags=${TAGS}"
+                    echo "release_tag=${RELEASE_TAG}"
+                    echo "release_sha=${RELEASE_SHA}"
+                    echo "sha_tag=${SHA_SUFFIX}"
+                    echo "latest_tag=${LATEST_SUFFIX}"
+                  } >> "$GITHUB_OUTPUT"
+
+            - name: Build and push Docker image
+              uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+              with:
+                  context: .
+                  push: true
+                  build-args: |
+                      ZEROCLAW_CARGO_ALL_FEATURES=true
+                  tags: ${{ steps.meta.outputs.tags }}
+                  platforms: linux/amd64,linux/arm64
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+
+            - name: Set GHCR package visibility to public
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  set -euo pipefail
+                  owner="${GITHUB_REPOSITORY_OWNER,,}"
+                  repo="${GITHUB_REPOSITORY#*/}"
+
+                  candidates=(
+                    "$repo"
+                    "${owner}%2F${repo}"
+                  )
+
+                  for scope in orgs users; do
+                    for pkg in "${candidates[@]}"; do
+                      code="$(curl -sS -o /tmp/ghcr-visibility.json -w "%{http_code}" \
+                        -X PATCH \
+                        -H "Authorization: Bearer ${GH_TOKEN}" \
+                        -H "Accept: application/vnd.github+json" \
+                        -H "X-GitHub-Api-Version: 2022-11-28" \
+                        "https://api.github.com/${scope}/${owner}/packages/container/${pkg}/visibility" \
+                        -d '{"visibility":"public"}' || true)"
+
+                      if [ "$code" = "200" ] || [ "$code" = "204" ]; then
+                        echo "GHCR package visibility is public (${scope}/${owner}/${pkg})."
+                        exit 0
+                      fi
+
+                      echo "Visibility attempt ${scope}/${owner}/${pkg} returned HTTP ${code}."
+                    done
+                  done
+
+                  echo "::warning::Unable to update GHCR visibility via API in this run; proceeding to GHCR publish contract verification."
+
+            - name: Validate GHCR publish contract
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  mkdir -p artifacts
+                  python3 scripts/ci/ghcr_publish_contract_guard.py \
+                    --repository "${GITHUB_REPOSITORY,,}" \
+                    --release-tag "${{ steps.meta.outputs.release_tag }}" \
+                    --sha "${{ steps.meta.outputs.release_sha }}" \
+                    --policy-file .github/release/ghcr-tag-policy.json \
+                    --output-json artifacts/ghcr-publish-contract.json \
+                    --output-md artifacts/ghcr-publish-contract.md \
+                    --fail-on-violation
+
+            - name: Emit GHCR publish contract audit event
+              if: always()
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [ -f artifacts/ghcr-publish-contract.json ]; then
+                    python3 scripts/ci/emit_audit_event.py \
+                      --event-type ghcr_publish_contract \
+                      --input-json artifacts/ghcr-publish-contract.json \
+                      --output-json artifacts/audit-event-ghcr-publish-contract.json \
+                      --artifact-name ghcr-publish-contract \
+                      --retention-days 21
+                  fi
+
+            - name: Publish GHCR contract summary
+              if: always()
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [ -f artifacts/ghcr-publish-contract.md ]; then
+                    cat artifacts/ghcr-publish-contract.md >> "$GITHUB_STEP_SUMMARY"
+                  fi
+
+            - name: Upload GHCR publish contract artifacts
+              if: always()
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: ghcr-publish-contract
+                  path: |
+                      artifacts/ghcr-publish-contract.json
+                      artifacts/ghcr-publish-contract.md
+                      artifacts/audit-event-ghcr-publish-contract.json
+                  if-no-files-found: ignore
+                  retention-days: 21
+
+            - name: Scan published image for vulnerabilities (Trivy)
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  mkdir -p artifacts
+
+                  TAG_NAME="${{ steps.meta.outputs.release_tag }}"
+                  SHA_TAG="${{ steps.meta.outputs.sha_tag }}"
+                  LATEST_TAG="${{ steps.meta.outputs.latest_tag }}"
+                  IMAGE_BASE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+                  VERSION_REF="${IMAGE_BASE}:${TAG_NAME}"
+                  SHA_REF="${IMAGE_BASE}:${SHA_TAG}"
+                  LATEST_REF="${IMAGE_BASE}:${LATEST_TAG}"
+                  SARIF_OUT="artifacts/trivy-${TAG_NAME}.sarif"
+                  TABLE_OUT="artifacts/trivy-${TAG_NAME}.txt"
+                  JSON_OUT="artifacts/trivy-${TAG_NAME}.json"
+                  SHA_TABLE_OUT="artifacts/trivy-${SHA_TAG}.txt"
+                  SHA_JSON_OUT="artifacts/trivy-${SHA_TAG}.json"
+                  LATEST_TABLE_OUT="artifacts/trivy-${LATEST_TAG}.txt"
+                  LATEST_JSON_OUT="artifacts/trivy-${LATEST_TAG}.json"
+
+                  scan_trivy() {
+                    local image_ref="$1"
+                    local output_prefix="$2"
+
+                    docker run --rm \
+                      -v "$PWD/artifacts:/work" \
+                      aquasec/trivy:0.58.2 image \
+                      --quiet \
+                      --ignore-unfixed \
+                      --severity HIGH,CRITICAL \
+                      --format json \
+                      --output "/work/${output_prefix}.json" \
+                      "${image_ref}"
+
+                    docker run --rm \
+                      -v "$PWD/artifacts:/work" \
+                      aquasec/trivy:0.58.2 image \
+                      --quiet \
+                      --ignore-unfixed \
+                      --severity HIGH,CRITICAL \
+                      --format table \
+                      --output "/work/${output_prefix}.txt" \
+                      "${image_ref}"
+                  }
+
+                  docker run --rm \
+                    -v "$PWD/artifacts:/work" \
+                    aquasec/trivy:0.58.2 image \
+                    --quiet \
+                    --ignore-unfixed \
+                    --severity HIGH,CRITICAL \
+                    --format sarif \
+                    --output "/work/trivy-${TAG_NAME}.sarif" \
+                    "${VERSION_REF}"
+
+                  scan_trivy "${VERSION_REF}" "trivy-${TAG_NAME}"
+                  scan_trivy "${SHA_REF}" "trivy-${SHA_TAG}"
+                  scan_trivy "${LATEST_REF}" "trivy-${LATEST_TAG}"
+
+                  echo "Generated Trivy reports:"
+                  ls -1 "$SARIF_OUT" "$TABLE_OUT" "$JSON_OUT" "$SHA_TABLE_OUT" "$SHA_JSON_OUT" "$LATEST_TABLE_OUT" "$LATEST_JSON_OUT"
+
+            - name: Validate GHCR vulnerability gate
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  python3 scripts/ci/ghcr_vulnerability_gate.py \
+                    --release-tag "${{ steps.meta.outputs.release_tag }}" \
+                    --sha-tag "${{ steps.meta.outputs.sha_tag }}" \
+                    --latest-tag "${{ steps.meta.outputs.latest_tag }}" \
+                    --release-report-json "artifacts/trivy-${{ steps.meta.outputs.release_tag }}.json" \
+                    --sha-report-json "artifacts/trivy-${{ steps.meta.outputs.sha_tag }}.json" \
+                    --latest-report-json "artifacts/trivy-${{ steps.meta.outputs.latest_tag }}.json" \
+                    --policy-file .github/release/ghcr-vulnerability-policy.json \
+                    --output-json artifacts/ghcr-vulnerability-gate.json \
+                    --output-md artifacts/ghcr-vulnerability-gate.md \
+                    --fail-on-violation
+
+            - name: Emit GHCR vulnerability gate audit event
+              if: always()
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [ -f artifacts/ghcr-vulnerability-gate.json ]; then
+                    python3 scripts/ci/emit_audit_event.py \
+                      --event-type ghcr_vulnerability_gate \
+                      --input-json artifacts/ghcr-vulnerability-gate.json \
+                      --output-json artifacts/audit-event-ghcr-vulnerability-gate.json \
+                      --artifact-name ghcr-vulnerability-gate \
+                      --retention-days 21
+                  fi
+
+            - name: Publish GHCR vulnerability summary
+              if: always()
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [ -f artifacts/ghcr-vulnerability-gate.md ]; then
+                    cat artifacts/ghcr-vulnerability-gate.md >> "$GITHUB_STEP_SUMMARY"
+                  fi
+
+            - name: Upload GHCR vulnerability gate artifacts
+              if: always()
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: ghcr-vulnerability-gate
+                  path: |
+                      artifacts/ghcr-vulnerability-gate.json
+                      artifacts/ghcr-vulnerability-gate.md
+                      artifacts/audit-event-ghcr-vulnerability-gate.json
+                  if-no-files-found: ignore
+                  retention-days: 21
+
+            - name: Detect Trivy SARIF report
+              id: trivy-sarif
+              if: always()
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  sarif_path="artifacts/trivy-${{ steps.meta.outputs.release_tag }}.sarif"
+                  if [ -f "${sarif_path}" ]; then
+                    echo "exists=true" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "exists=false" >> "$GITHUB_OUTPUT"
+                    echo "::notice::Trivy SARIF report not found at ${sarif_path}; skipping SARIF upload."
+                  fi
+
+            - name: Upload Trivy SARIF
+              if: always() && steps.trivy-sarif.outputs.exists == 'true'
+              uses: github/codeql-action/upload-sarif@89a39a4e59826350b863aa6b6252a07ad50cf83e # v4
+              with:
+                  sarif_file: artifacts/trivy-${{ steps.meta.outputs.release_tag }}.sarif
+                  category: ghcr-trivy
+
+            - name: Upload Trivy report artifacts
+              if: always()
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: ghcr-trivy-report
+                  path: |
+                      artifacts/trivy-${{ steps.meta.outputs.release_tag }}.sarif
+                      artifacts/trivy-${{ steps.meta.outputs.release_tag }}.txt
+                      artifacts/trivy-${{ steps.meta.outputs.release_tag }}.json
+                      artifacts/trivy-sha-*.txt
+                      artifacts/trivy-sha-*.json
+                      artifacts/trivy-latest.txt
+                      artifacts/trivy-latest.json
+                  if-no-files-found: ignore
+                  retention-days: 14
+
     verify-artifacts:
         name: Verify Artifact Set
         needs: [prepare, build-release]
@@ -523,7 +837,7 @@ jobs:
     publish:
         name: Publish Release
         if: needs.prepare.outputs.publish_release == 'true'
-        needs: [prepare, verify-artifacts]
+        needs: [prepare, verify-artifacts, build-docker]
         runs-on: [self-hosted, Linux, X64, aws-india, blacksmith-2vcpu-ubuntu-2404, hetzner]
         timeout-minutes: 45
         steps:
@@ -668,46 +982,6 @@ jobs:
               run: |
                   set -euo pipefail
                   cat artifacts/release-notes-supply-chain.md >> "$GITHUB_STEP_SUMMARY"
-
-            - name: Verify GHCR release tag availability
-              shell: bash
-              env:
-                  RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
-              run: |
-                  set -euo pipefail
-                  repo="${GITHUB_REPOSITORY,,}"
-                  manifest_url="https://ghcr.io/v2/${repo}/manifests/${RELEASE_TAG}"
-                  accept_header="application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json"
-                  max_attempts=75
-                  sleep_seconds=20
-
-                  for attempt in $(seq 1 "$max_attempts"); do
-                    token_resp="$(curl -sS "https://ghcr.io/token?scope=repository:${repo}:pull" || true)"
-                    token="$(echo "$token_resp" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
-
-                    if [ -z "$token" ]; then
-                      code="000"
-                    else
-                      code="$(curl -sS -o /tmp/ghcr-release-manifest.json -w "%{http_code}" \
-                        -H "Authorization: Bearer ${token}" \
-                        -H "Accept: ${accept_header}" \
-                        "${manifest_url}" || true)"
-                    fi
-
-                    if [ "$code" = "200" ]; then
-                      echo "GHCR release tag is available: ${repo}:${RELEASE_TAG}"
-                      exit 0
-                  fi
-
-                    if [ "$attempt" -lt "$max_attempts" ]; then
-                      echo "Waiting for GHCR tag ${repo}:${RELEASE_TAG} (attempt ${attempt}/${max_attempts}, HTTP ${code})..."
-                      sleep "$sleep_seconds"
-                    fi
-                  done
-
-                  echo "::error::GHCR tag ${repo}:${RELEASE_TAG} was not available before release publish timeout."
-                  cat /tmp/ghcr-release-manifest.json || true
-                  exit 1
 
             - name: Create GitHub Release
               uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
