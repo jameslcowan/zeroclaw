@@ -54,6 +54,13 @@ jobs:
               with:
                   toolchain: 1.92.0
 
+            - name: Ensure cargo component
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  rustup component add cargo --toolchain 1.92.0
+                  cargo --version
+
             - uses: useblacksmith/rust-cache@f53e7f127245d2a269b3d90879ccf259876842d5 # v3
               with:
                   prefix-key: fast-build

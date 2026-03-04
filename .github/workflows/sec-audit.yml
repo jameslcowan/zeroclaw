@@ -163,6 +163,12 @@ jobs:
             - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
               with:
                   toolchain: 1.92.0
+            - name: Ensure cargo component
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  rustup component add cargo --toolchain 1.92.0
+                  cargo --version
             - uses: useblacksmith/rust-cache@f53e7f127245d2a269b3d90879ccf259876842d5 # v3
               with:
                   prefix-key: sec-audit-security-regressions

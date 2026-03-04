@@ -33,8 +33,7 @@ resolve_cargo_bin() {
   fi
 
   if command -v cargo >/dev/null 2>&1; then
-    # Keep this as "cargo" so each invocation re-resolves PATH on the runner.
-    printf '%s\n' "cargo"
+    printf '%s\n' "$(command -v cargo)"
     return 0
   fi
 
@@ -51,12 +50,10 @@ resolve_cargo_bin() {
   return 1
 }
 
-CARGO_BIN="$(resolve_cargo_bin)"
-
 for test_name in "${TESTS[@]}"; do
-  if [ "${CARGO_BIN}" != "cargo" ] && [ ! -x "${CARGO_BIN}" ]; then
-    CARGO_BIN="$(resolve_cargo_bin)"
-  fi
+  # Cargo path may be replaced during long builds on some self-hosted runners.
+  hash -r >/dev/null 2>&1 || true
+  CARGO_BIN="$(resolve_cargo_bin)"
   echo "==> ${CARGO_BIN} test --locked --lib ${test_name}"
   "${CARGO_BIN}" test --locked --lib "${test_name}" -- --nocapture
 done
