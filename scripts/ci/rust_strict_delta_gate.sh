@@ -55,6 +55,35 @@ CLIPPY_STDERR_FILE="$(mktemp)"
 FILTERED_OUTPUT_FILE="$(mktemp)"
 trap 'rm -f "$CHANGED_LINES_JSON_FILE" "$CLIPPY_JSON_FILE" "$CLIPPY_STDERR_FILE" "$FILTERED_OUTPUT_FILE"' EXIT
 
+resolve_cargo_bin() {
+    local requested="${CARGO_BIN:-}"
+    local home_fallback="${CARGO_HOME:-$HOME/.cargo}/bin/cargo"
+
+    if [ -n "${requested}" ] && [ -x "${requested}" ]; then
+        printf '%s\n' "${requested}"
+        return 0
+    fi
+
+    if command -v cargo >/dev/null 2>&1; then
+        printf '%s\n' "cargo"
+        return 0
+    fi
+
+    if [ -x "${home_fallback}" ]; then
+        printf '%s\n' "${home_fallback}"
+        return 0
+    fi
+
+    if [ -n "${requested}" ]; then
+        echo "CARGO_BIN is set to '${requested}' but is not executable, and no fallback cargo was found." >&2
+    else
+        echo "cargo binary not found in PATH or ${home_fallback}." >&2
+    fi
+    return 1
+}
+
+CARGO_BIN="$(resolve_cargo_bin)"
+
 python3 - "$BASE_SHA" "${EXISTING_FILES[@]}" >"$CHANGED_LINES_JSON_FILE" <<'PY'
 import json
 import re
@@ -88,7 +117,7 @@ print(json.dumps(changed))
 PY
 
 set +e
-cargo clippy --quiet --locked --all-targets --message-format=json -- -D warnings >"$CLIPPY_JSON_FILE" 2>"$CLIPPY_STDERR_FILE"
+"${CARGO_BIN}" clippy --quiet --locked --all-targets --message-format=json -- -D warnings >"$CLIPPY_JSON_FILE" 2>"$CLIPPY_STDERR_FILE"
 CLIPPY_EXIT=$?
 set -e
 

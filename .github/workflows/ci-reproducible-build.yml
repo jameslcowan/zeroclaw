@@ -61,6 +61,13 @@ jobs:
               with:
                   toolchain: 1.92.0
 
+            - name: Ensure cargo component
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  rustup component add cargo --toolchain 1.92.0
+                  cargo --version
+
             - name: Run reproducible build check
               shell: bash
               run: |
