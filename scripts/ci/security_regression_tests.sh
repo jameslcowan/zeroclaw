@@ -23,24 +23,40 @@ TESTS=(
   scrub_aws_access_key_prefix
 )
 
-# Resolve cargo robustly across heterogeneous self-hosted runners.
-requested_cargo_bin="${CARGO_BIN:-}"
-if [ -n "${requested_cargo_bin}" ] && [ -x "${requested_cargo_bin}" ]; then
-  CARGO_BIN="${requested_cargo_bin}"
-elif command -v cargo >/dev/null 2>&1; then
-  CARGO_BIN="$(command -v cargo)"
-elif [ -x "${CARGO_HOME:-$HOME/.cargo}/bin/cargo" ]; then
-  CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin/cargo"
-else
-  if [ -n "${requested_cargo_bin}" ]; then
-    echo "error: CARGO_BIN is set to '${requested_cargo_bin}' but is not executable, and no fallback cargo was found." >&2
-  else
-    echo "error: cargo binary not found in PATH or ${CARGO_HOME:-$HOME/.cargo}/bin/cargo." >&2
+resolve_cargo_bin() {
+  local requested="${CARGO_BIN:-}"
+  local home_fallback="${CARGO_HOME:-$HOME/.cargo}/bin/cargo"
+
+  if [ -n "${requested}" ] && [ -x "${requested}" ]; then
+    printf '%s\n' "${requested}"
+    return 0
   fi
-  exit 1
-fi
+
+  if command -v cargo >/dev/null 2>&1; then
+    # Keep this as "cargo" so each invocation re-resolves PATH on the runner.
+    printf '%s\n' "cargo"
+    return 0
+  fi
+
+  if [ -x "${home_fallback}" ]; then
+    printf '%s\n' "${home_fallback}"
+    return 0
+  fi
+
+  if [ -n "${requested}" ]; then
+    echo "error: CARGO_BIN is set to '${requested}' but is not executable, and no fallback cargo was found." >&2
+  else
+    echo "error: cargo binary not found in PATH or ${home_fallback}." >&2
+  fi
+  return 1
+}
+
+CARGO_BIN="$(resolve_cargo_bin)"
 
 for test_name in "${TESTS[@]}"; do
+  if [ "${CARGO_BIN}" != "cargo" ] && [ ! -x "${CARGO_BIN}" ]; then
+    CARGO_BIN="$(resolve_cargo_bin)"
+  fi
   echo "==> ${CARGO_BIN} test --locked --lib ${test_name}"
   "${CARGO_BIN}" test --locked --lib "${test_name}" -- --nocapture
 done
