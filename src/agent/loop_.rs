@@ -263,6 +263,31 @@ static CJK_DEFERRED_ACTION_VERB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(查看|检查|搜索|查找|浏览|打开|读取|写入|运行|执行|调用|分析|验证|列出|获取|尝试|试试|继续|处理|修复|看看|看一看|看一下)").unwrap()
 });
 
+/// Detect completion claims that imply state-changing work already happened
+/// without an accompanying tool call.
+static ACTION_COMPLETION_CUE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?ix)\b(done|completed?|finished|successfully|i(?:'ve|\s+have)|we(?:'ve|\s+have))\b",
+    )
+    .unwrap()
+});
+
+/// Verbs that usually imply side effects requiring tool execution.
+static SIDE_EFFECT_ACTION_VERB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?ix)\b(create|created|write|wrote|run|ran|execute|executed|update|updated|delete|deleted|remove|removed|rename|renamed|move|moved|install|installed|save|saved|make|made)\b",
+    )
+    .unwrap()
+});
+
+/// Concrete artifacts often referenced in file/system action completion claims.
+static SIDE_EFFECT_ACTION_OBJECT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?ix)\b(file|files|folder|folders|directory|directories|workspace|cwd|current\s+working\s+directory|command|commands|script|scripts|path|paths)\b",
+    )
+    .unwrap()
+});
+
 /// Fast check for CJK scripts (Han/Hiragana/Katakana/Hangul) so we only run
 /// additional regexes when non-Latin text is present.
 static CJK_SCRIPT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -347,7 +372,7 @@ const AUTO_CRON_DELIVERY_CHANNELS: &[&str] = &[
 
 const NON_CLI_APPROVAL_WAIT_TIMEOUT_SECS: u64 = 300;
 const NON_CLI_APPROVAL_POLL_INTERVAL_MS: u64 = 250;
-const MISSING_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: your last reply indicated you were about to take an action, but no valid tool call was emitted. If a tool is needed, emit it now using the required <tool_call>...</tool_call> format. If no tool is needed, provide the complete final answer now and do not defer action.";
+const MISSING_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: your last reply implied a follow-up action or claimed action completion, but no valid tool call was emitted. If a tool is needed, emit it now using the required <tool_call>...</tool_call> format. If no tool is needed, provide the complete final answer now and do not defer action.";
 
 #[derive(Debug, Clone)]
 pub(crate) struct NonCliApprovalPrompt {
@@ -624,6 +649,17 @@ fn looks_like_deferred_action_without_tool_call(text: &str) -> bool {
     CJK_SCRIPT_REGEX.is_match(trimmed)
         && CJK_DEFERRED_ACTION_CUE_REGEX.is_match(trimmed)
         && CJK_DEFERRED_ACTION_VERB_REGEX.is_match(trimmed)
+}
+
+fn looks_like_unverified_action_completion_without_tool_call(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    ACTION_COMPLETION_CUE_REGEX.is_match(trimmed)
+        && SIDE_EFFECT_ACTION_VERB_REGEX.is_match(trimmed)
+        && SIDE_EFFECT_ACTION_OBJECT_REGEX.is_match(trimmed)
 }
 
 fn merge_continuation_text(existing: &str, next: &str) -> String {
@@ -1897,8 +1933,12 @@ pub async fn run_tool_call_loop(
         }
 
         if tool_calls.is_empty() {
+            let deferred_action_signal =
+                looks_like_deferred_action_without_tool_call(&display_text);
+            let completion_claim_signal =
+                looks_like_unverified_action_completion_without_tool_call(&display_text);
             let missing_tool_call_signal =
-                parse_issue_detected || looks_like_deferred_action_without_tool_call(&display_text);
+                parse_issue_detected || deferred_action_signal || completion_claim_signal;
             let missing_tool_call_followthrough = !missing_tool_call_retry_used
                 && iteration + 1 < max_iterations
                 && !tool_specs.is_empty()
@@ -1908,6 +1948,8 @@ pub async fn run_tool_call_loop(
                 missing_tool_call_retry_prompt = Some(MISSING_TOOL_CALL_RETRY_PROMPT.to_string());
                 let retry_reason = if parse_issue_detected {
                     "parse_issue_detected"
+                } else if completion_claim_signal {
+                    "completion_claim_text_detected"
                 } else {
                     "deferred_action_text_detected"
                 };
@@ -1931,7 +1973,7 @@ pub async fn run_tool_call_loop(
                     if let Some(ref tx) = on_delta {
                         let _ = tx
                             .send(format!(
-                                "{DRAFT_PROGRESS_SENTINEL}\u{21bb} Retrying: response deferred action without a tool call\n"
+                                "{DRAFT_PROGRESS_SENTINEL}\u{21bb} Retrying: response implied action without a verifiable tool call\n"
                             ))
                             .await;
                     }
@@ -5287,6 +5329,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_tool_call_loop_retries_when_response_claims_completion_without_tool_call() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            "Done — I've created the `names` folder in the current working directory.",
+            r#"<tool_call>
+{"name":"count_tool","arguments":{"value":"mkdir names"}}
+</tool_call>"#,
+            "done after verified tool execution",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(CountingTool::new(
+            "count_tool",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("please create the names folder"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("completion claim without tool call should trigger a recovery retry");
+
+        assert_eq!(result, "done after verified tool execution");
+        assert_eq!(
+            invocations.load(Ordering::SeqCst),
+            1,
+            "recovery retry should enforce one real tool execution"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_errors_when_completion_claim_repeats_without_tool_call() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            "Done — I've created the `names` folder in the current working directory.",
+            "Finished successfully. The folder and file are now created in workspace.",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(CountingTool::new(
+            "count_tool",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("please create the names folder"),
+        ];
+        let observer = NoopObserver;
+
+        let err = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect_err("repeated completion claims without tool call should hard-fail");
+
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("deferred action without emitting a tool call"),
+            "unexpected error text: {err_text}"
+        );
+        assert_eq!(
+            invocations.load(Ordering::SeqCst),
+            0,
+            "tool should not execute when provider never emits a real tool call"
+        );
+    }
+
+    #[tokio::test]
     async fn run_tool_call_loop_retries_when_native_tool_args_are_truncated_json() {
         let provider = ScriptedProvider::from_scripted_responses(vec![
             ChatResponse {
@@ -6738,6 +6883,26 @@ Done."#;
         ));
         assert!(!looks_like_deferred_action_without_tool_call(
             "最新结果已经在上面整理完成。"
+        ));
+    }
+
+    #[test]
+    fn looks_like_unverified_action_completion_without_tool_call_detects_claimed_side_effects() {
+        assert!(looks_like_unverified_action_completion_without_tool_call(
+            "Done — I've created the `names` folder in the current working directory."
+        ));
+        assert!(looks_like_unverified_action_completion_without_tool_call(
+            "Finished successfully: I wrote the file to the workspace path."
+        ));
+    }
+
+    #[test]
+    fn looks_like_unverified_action_completion_without_tool_call_ignores_non_side_effect_text() {
+        assert!(!looks_like_unverified_action_completion_without_tool_call(
+            "Done. Here is the explanation of why that approach works."
+        ));
+        assert!(!looks_like_unverified_action_completion_without_tool_call(
+            "I have a suggestion for the plan if you want me to proceed."
         ));
     }
 
