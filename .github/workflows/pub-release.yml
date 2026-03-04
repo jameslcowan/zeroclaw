@@ -526,16 +526,112 @@ jobs:
                     echo "latest_tag=${LATEST_SUFFIX}"
                   } >> "$GITHUB_OUTPUT"
 
-            - name: Build and push Docker image
+            - name: Build Docker image
               uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
               with:
                   context: .
-                  push: ${{ needs.prepare.outputs.publish_release == 'true' }}
-                  load: ${{ needs.prepare.outputs.publish_release != 'true' }}
+                  push: false
+                  load: true
                   build-args: |
                       ZEROCLAW_CARGO_ALL_FEATURES=true
                   tags: ${{ steps.meta.outputs.tags }}
-                  platforms: ${{ needs.prepare.outputs.publish_release == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+                  platforms: linux/amd64
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+
+            - name: Scan Docker image for vulnerabilities (Trivy)
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  mkdir -p artifacts
+
+                  TAG_NAME="${{ steps.meta.outputs.release_tag }}"
+                  SHA_TAG="${{ steps.meta.outputs.sha_tag }}"
+                  LATEST_TAG="${{ steps.meta.outputs.latest_tag }}"
+                  IMAGE_BASE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+                  VERSION_REF="${IMAGE_BASE}:${TAG_NAME}"
+                  SHA_REF="${IMAGE_BASE}:${SHA_TAG}"
+                  LATEST_REF="${IMAGE_BASE}:${LATEST_TAG}"
+                  SARIF_OUT="artifacts/trivy-${TAG_NAME}.sarif"
+                  TABLE_OUT="artifacts/trivy-${TAG_NAME}.txt"
+                  JSON_OUT="artifacts/trivy-${TAG_NAME}.json"
+                  SHA_TABLE_OUT="artifacts/trivy-${SHA_TAG}.txt"
+                  SHA_JSON_OUT="artifacts/trivy-${SHA_TAG}.json"
+                  LATEST_TABLE_OUT="artifacts/trivy-${LATEST_TAG}.txt"
+                  LATEST_JSON_OUT="artifacts/trivy-${LATEST_TAG}.json"
+
+                  scan_trivy() {
+                    local image_ref="$1"
+                    local output_prefix="$2"
+
+                    docker run --rm \
+                      -v "$PWD/artifacts:/work" \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      aquasec/trivy:0.58.2 image \
+                      --quiet \
+                      --ignore-unfixed \
+                      --severity HIGH,CRITICAL \
+                      --format json \
+                      --output "/work/${output_prefix}.json" \
+                      "${image_ref}"
+
+                    docker run --rm \
+                      -v "$PWD/artifacts:/work" \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      aquasec/trivy:0.58.2 image \
+                      --quiet \
+                      --ignore-unfixed \
+                      --severity HIGH,CRITICAL \
+                      --format table \
+                      --output "/work/${output_prefix}.txt" \
+                      "${image_ref}"
+                  }
+
+                  docker run --rm \
+                    -v "$PWD/artifacts:/work" \
+                    -v /var/run/docker.sock:/var/run/docker.sock \
+                    aquasec/trivy:0.58.2 image \
+                    --quiet \
+                    --ignore-unfixed \
+                    --severity HIGH,CRITICAL \
+                    --format sarif \
+                    --output "/work/trivy-${TAG_NAME}.sarif" \
+                    "${VERSION_REF}"
+
+                  scan_trivy "${VERSION_REF}" "trivy-${TAG_NAME}"
+                  scan_trivy "${SHA_REF}" "trivy-${SHA_TAG}"
+                  scan_trivy "${LATEST_REF}" "trivy-${LATEST_TAG}"
+
+                  echo "Generated Trivy reports:"
+                  ls -1 "$SARIF_OUT" "$TABLE_OUT" "$JSON_OUT" "$SHA_TABLE_OUT" "$SHA_JSON_OUT" "$LATEST_TABLE_OUT" "$LATEST_JSON_OUT"
+
+            - name: Validate vulnerability gate
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  python3 scripts/ci/ghcr_vulnerability_gate.py \
+                    --release-tag "${{ steps.meta.outputs.release_tag }}" \
+                    --sha-tag "${{ steps.meta.outputs.sha_tag }}" \
+                    --latest-tag "${{ steps.meta.outputs.latest_tag }}" \
+                    --release-report-json "artifacts/trivy-${{ steps.meta.outputs.release_tag }}.json" \
+                    --sha-report-json "artifacts/trivy-${{ steps.meta.outputs.sha_tag }}.json" \
+                    --latest-report-json "artifacts/trivy-${{ steps.meta.outputs.latest_tag }}.json" \
+                    --policy-file .github/release/ghcr-vulnerability-policy.json \
+                    --output-json artifacts/ghcr-vulnerability-gate.json \
+                    --output-md artifacts/ghcr-vulnerability-gate.md \
+                    --fail-on-violation
+
+            - name: Push Docker image to GHCR
+              if: needs.prepare.outputs.publish_release == 'true'
+              uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+              with:
+                  context: .
+                  push: true
+                  load: false
+                  build-args: |
+                      ZEROCLAW_CARGO_ALL_FEATURES=true
+                  tags: ${{ steps.meta.outputs.tags }}
+                  platforms: linux/amd64,linux/arm64
                   cache-from: type=gha
                   cache-to: type=gha,mode=max
 
@@ -624,87 +720,6 @@ jobs:
                       artifacts/audit-event-ghcr-publish-contract.json
                   if-no-files-found: ignore
                   retention-days: 21
-
-            - name: Scan published image for vulnerabilities (Trivy)
-              if: needs.prepare.outputs.publish_release == 'true'
-              shell: bash
-              run: |
-                  set -euo pipefail
-                  mkdir -p artifacts
-
-                  TAG_NAME="${{ steps.meta.outputs.release_tag }}"
-                  SHA_TAG="${{ steps.meta.outputs.sha_tag }}"
-                  LATEST_TAG="${{ steps.meta.outputs.latest_tag }}"
-                  IMAGE_BASE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-                  VERSION_REF="${IMAGE_BASE}:${TAG_NAME}"
-                  SHA_REF="${IMAGE_BASE}:${SHA_TAG}"
-                  LATEST_REF="${IMAGE_BASE}:${LATEST_TAG}"
-                  SARIF_OUT="artifacts/trivy-${TAG_NAME}.sarif"
-                  TABLE_OUT="artifacts/trivy-${TAG_NAME}.txt"
-                  JSON_OUT="artifacts/trivy-${TAG_NAME}.json"
-                  SHA_TABLE_OUT="artifacts/trivy-${SHA_TAG}.txt"
-                  SHA_JSON_OUT="artifacts/trivy-${SHA_TAG}.json"
-                  LATEST_TABLE_OUT="artifacts/trivy-${LATEST_TAG}.txt"
-                  LATEST_JSON_OUT="artifacts/trivy-${LATEST_TAG}.json"
-
-                  scan_trivy() {
-                    local image_ref="$1"
-                    local output_prefix="$2"
-
-                    docker run --rm \
-                      -v "$PWD/artifacts:/work" \
-                      aquasec/trivy:0.58.2 image \
-                      --quiet \
-                      --ignore-unfixed \
-                      --severity HIGH,CRITICAL \
-                      --format json \
-                      --output "/work/${output_prefix}.json" \
-                      "${image_ref}"
-
-                    docker run --rm \
-                      -v "$PWD/artifacts:/work" \
-                      aquasec/trivy:0.58.2 image \
-                      --quiet \
-                      --ignore-unfixed \
-                      --severity HIGH,CRITICAL \
-                      --format table \
-                      --output "/work/${output_prefix}.txt" \
-                      "${image_ref}"
-                  }
-
-                  docker run --rm \
-                    -v "$PWD/artifacts:/work" \
-                    aquasec/trivy:0.58.2 image \
-                    --quiet \
-                    --ignore-unfixed \
-                    --severity HIGH,CRITICAL \
-                    --format sarif \
-                    --output "/work/trivy-${TAG_NAME}.sarif" \
-                    "${VERSION_REF}"
-
-                  scan_trivy "${VERSION_REF}" "trivy-${TAG_NAME}"
-                  scan_trivy "${SHA_REF}" "trivy-${SHA_TAG}"
-                  scan_trivy "${LATEST_REF}" "trivy-${LATEST_TAG}"
-
-                  echo "Generated Trivy reports:"
-                  ls -1 "$SARIF_OUT" "$TABLE_OUT" "$JSON_OUT" "$SHA_TABLE_OUT" "$SHA_JSON_OUT" "$LATEST_TABLE_OUT" "$LATEST_JSON_OUT"
-
-            - name: Validate GHCR vulnerability gate
-              if: needs.prepare.outputs.publish_release == 'true'
-              shell: bash
-              run: |
-                  set -euo pipefail
-                  python3 scripts/ci/ghcr_vulnerability_gate.py \
-                    --release-tag "${{ steps.meta.outputs.release_tag }}" \
-                    --sha-tag "${{ steps.meta.outputs.sha_tag }}" \
-                    --latest-tag "${{ steps.meta.outputs.latest_tag }}" \
-                    --release-report-json "artifacts/trivy-${{ steps.meta.outputs.release_tag }}.json" \
-                    --sha-report-json "artifacts/trivy-${{ steps.meta.outputs.sha_tag }}.json" \
-                    --latest-report-json "artifacts/trivy-${{ steps.meta.outputs.latest_tag }}.json" \
-                    --policy-file .github/release/ghcr-vulnerability-policy.json \
-                    --output-json artifacts/ghcr-vulnerability-gate.json \
-                    --output-md artifacts/ghcr-vulnerability-gate.md \
-                    --fail-on-violation
 
             - name: Emit GHCR vulnerability gate audit event
               if: always() && needs.prepare.outputs.publish_release == 'true'
