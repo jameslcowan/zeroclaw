@@ -427,10 +427,7 @@ fn apply_integration_credentials_update(
 
     updated.default_provider = Some(spec.provider_id.to_string());
     if !fields.contains_key("default_model") && !was_active_provider {
-        updated.default_model = Some(crate::config::resolve_default_model_id(
-            None,
-            Some(spec.provider_id),
-        ));
+        updated.default_model = spec.model_options.first().map(|value| (*value).to_string());
     }
 
     if !spec.supports_api_url && !was_active_provider {
