@@ -23,7 +23,22 @@ TESTS=(
   scrub_aws_access_key_prefix
 )
 
-CARGO_BIN="${CARGO_BIN:-cargo}"
+# Resolve cargo robustly across heterogeneous self-hosted runners.
+requested_cargo_bin="${CARGO_BIN:-}"
+if [ -n "${requested_cargo_bin}" ] && [ -x "${requested_cargo_bin}" ]; then
+  CARGO_BIN="${requested_cargo_bin}"
+elif command -v cargo >/dev/null 2>&1; then
+  CARGO_BIN="$(command -v cargo)"
+elif [ -x "${CARGO_HOME:-$HOME/.cargo}/bin/cargo" ]; then
+  CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin/cargo"
+else
+  if [ -n "${requested_cargo_bin}" ]; then
+    echo "error: CARGO_BIN is set to '${requested_cargo_bin}' but is not executable, and no fallback cargo was found." >&2
+  else
+    echo "error: cargo binary not found in PATH or ${CARGO_HOME:-$HOME/.cargo}/bin/cargo." >&2
+  fi
+  exit 1
+fi
 
 for test_name in "${TESTS[@]}"; do
   echo "==> ${CARGO_BIN} test --locked --lib ${test_name}"
