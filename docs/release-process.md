@@ -2,7 +2,7 @@
 
 This runbook defines the maintainers' standard release flow.
 
-Last verified: **February 25, 2026**.
+Last verified: **March 4, 2026**.
 
 ## Release Goals
 
@@ -46,6 +46,23 @@ Publish-mode guardrails:
 - Release notes include a generated supply-chain evidence preface (`release-notes-supply-chain.md`) plus GitHub-generated commit-window notes.
 
 ## Maintainer Procedure
+
+### 0) One-trigger promotion (`dev` -> `main`)
+
+Use workflow `.github/workflows/release-promote-dev-to-main.yml` when you are preparing a stable release cut.
+
+What this trigger automates:
+
+- Dispatches `Pub Release` verification mode against `dev` (`publish_release=false`, full release matrix, no publish).
+- Waits for verification completion and stops on failure.
+- Creates or updates PR `dev` -> `main` titled `release: promote dev to main`.
+- Optionally enables rebase auto-merge on the PR.
+
+What remains intentionally manual:
+
+- One maintainer approval (cannot self-approve).
+- Final merge gate from required branch protection checks.
+- Stable tag cut (`vX.Y.Z`) and publish after the promotion PR lands on `main`.
 
 ### 1) Preflight on `main`
 

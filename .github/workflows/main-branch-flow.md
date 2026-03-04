@@ -15,6 +15,7 @@ Use this with:
 | PR activity (`pull_request_target`) | `pr-intake-checks.yml`, `pr-labeler.yml`, `pr-auto-response.yml` |
 | PR activity (`pull_request`) | `ci-run.yml`, `sec-audit.yml`, plus path-scoped workflows |
 | Push to `dev`/`main` | `ci-run.yml`, `sec-audit.yml`, plus path-scoped workflows |
+| Manual promotion trigger | `release-promote-dev-to-main.yml` (runs `pub-release.yml` verification on `dev`, then opens/updates PR `dev` -> `main`) |
 | Tag push (`v*`) | `pub-release.yml` publish mode, `pub-docker-img.yml` publish job |
 | Scheduled/manual | `pub-release.yml` verification mode, `sec-codeql.yml`, `feature-matrix.yml`, `test-fuzz.yml`, `pr-check-stale.yml`, `pr-check-status.yml`, `sync-contributors.yml`, `test-benchmarks.yml`, `test-e2e.yml` |
 
@@ -123,6 +124,7 @@ Notes:
 ### 3) PR to `main` (direct or from `dev`)
 
 1. Contributor or maintainer opens PR with base `main`.
+   - Preferred release path: trigger `release-promote-dev-to-main.yml` to create/update PR `dev` -> `main` after successful `pub-release.yml` verification on `dev`.
 2. `ci-run.yml` and `sec-audit.yml` run on the PR, plus any path-scoped workflows.
 3. Maintainer merges PR once checks and review policy pass.
 4. Merge emits a `push` event on `main`.

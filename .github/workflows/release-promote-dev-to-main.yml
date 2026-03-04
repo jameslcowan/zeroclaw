@@ -1,0 +1,354 @@
+name: Release Promote Dev to Main
+
+on:
+    workflow_dispatch:
+        inputs:
+            auto_merge:
+                description: "Enable auto-merge (rebase) on promotion PR"
+                required: true
+                default: true
+                type: boolean
+            require_green_dev_ci:
+                description: "Require latest dev commit to have green required checks before promotion"
+                required: true
+                default: false
+                type: boolean
+
+concurrency:
+    group: release-promote-dev-to-main
+    cancel-in-progress: false
+
+permissions:
+    actions: write
+    contents: read
+    pull-requests: write
+
+env:
+    GIT_CONFIG_COUNT: "1"
+    GIT_CONFIG_KEY_0: core.hooksPath
+    GIT_CONFIG_VALUE_0: /dev/null
+    SOURCE_BRANCH: dev
+    TARGET_BRANCH: main
+    PROMOTION_PR_TITLE: "release: promote dev to main"
+    REQUIRED_CHECKS: "CI Required Gate,Security Required Gate"
+
+jobs:
+    promote:
+        name: Promote dev to main
+        runs-on: [self-hosted, Linux, X64, aws-india, blacksmith-2vcpu-ubuntu-2404, hetzner]
+        timeout-minutes: 180
+        steps:
+            - name: Validate actor authorization
+              uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+              env:
+                  RELEASE_AUTHORIZED_ACTORS: ${{ vars.RELEASE_AUTHORIZED_ACTORS || 'theonlyhennygod,chumyin,gh-xj' }}
+              with:
+                  script: |
+                      const allowlistRaw = (process.env.RELEASE_AUTHORIZED_ACTORS || '').trim();
+                      if (!allowlistRaw) {
+                        core.notice('RELEASE_AUTHORIZED_ACTORS is empty; skipping actor authorization check.');
+                        return;
+                      }
+
+                      const allowlist = allowlistRaw
+                        .split(',')
+                        .map((entry) => entry.trim())
+                        .filter(Boolean);
+
+                      if (!allowlist.includes(context.actor)) {
+                        core.setFailed(`Actor @${context.actor} is not in RELEASE_AUTHORIZED_ACTORS (${allowlist.join(', ')}).`);
+                        return;
+                      }
+
+                      core.info(`Actor @${context.actor} is authorized for release promotion.`);
+
+            - name: Resolve latest dev commit
+              id: resolve_head
+              uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+              with:
+                  script: |
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+                      const sourceBranch = process.env.SOURCE_BRANCH;
+
+                      const branch = await github.rest.repos.getBranch({
+                        owner,
+                        repo,
+                        branch: sourceBranch,
+                      });
+
+                      const sha = branch.data.commit.sha;
+                      core.setOutput('sha', sha);
+                      core.setOutput('commit_url', `https://github.com/${owner}/${repo}/commit/${sha}`);
+                      core.info(`Latest ${sourceBranch} commit: ${sha}`);
+
+            - name: Validate latest dev required checks
+              if: inputs.require_green_dev_ci == true
+              uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+              env:
+                  COMMIT_SHA: ${{ steps.resolve_head.outputs.sha }}
+              with:
+                  script: |
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+                      const requiredChecks = (process.env.REQUIRED_CHECKS || '')
+                        .split(',')
+                        .map((item) => item.trim())
+                        .filter(Boolean);
+                      const sha = process.env.COMMIT_SHA;
+
+                      if (!sha) {
+                        core.setFailed('Missing COMMIT_SHA.');
+                        return;
+                      }
+
+                      if (requiredChecks.length === 0) {
+                        core.notice('No REQUIRED_CHECKS configured; skipping check gate.');
+                        return;
+                      }
+
+                      const checkRunsResp = await github.rest.checks.listForRef({
+                        owner,
+                        repo,
+                        ref: sha,
+                        per_page: 100,
+                      });
+
+                      const latestByName = new Map();
+                      for (const run of checkRunsResp.data.check_runs) {
+                        const existing = latestByName.get(run.name);
+                        if (!existing) {
+                          latestByName.set(run.name, run);
+                          continue;
+                        }
+
+                        const existingTs = Date.parse(existing.completed_at || existing.started_at || existing.created_at || 0);
+                        const runTs = Date.parse(run.completed_at || run.started_at || run.created_at || 0);
+                        if (runTs > existingTs) {
+                          latestByName.set(run.name, run);
+                        }
+                      }
+
+                      const failures = [];
+                      for (const checkName of requiredChecks) {
+                        const run = latestByName.get(checkName);
+                        if (!run) {
+                          failures.push(`${checkName}: missing`);
+                          continue;
+                        }
+
+                        if (run.status !== 'completed' || run.conclusion !== 'success') {
+                          failures.push(`${checkName}: ${run.status}/${run.conclusion || 'none'}`);
+                        }
+                      }
+
+                      if (failures.length > 0) {
+                        core.setFailed(`Required checks are not green on ${sha}: ${failures.join('; ')}`);
+                        return;
+                      }
+
+                      core.info(`All required checks are green on ${sha}.`);
+
+            - name: Dispatch Pub Release verification on dev
+              id: dispatch_verify
+              uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+              with:
+                  script: |
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+                      const sourceBranch = process.env.SOURCE_BRANCH;
+                      const startedAt = new Date().toISOString();
+
+                      await github.rest.actions.createWorkflowDispatch({
+                        owner,
+                        repo,
+                        workflow_id: 'pub-release.yml',
+                        ref: sourceBranch,
+                        inputs: {
+                          release_ref: sourceBranch,
+                          publish_release: 'false',
+                          release_tag: '',
+                          draft: 'true',
+                        },
+                      });
+
+                      core.setOutput('started_at', startedAt);
+                      core.info(`Dispatched Pub Release verification on ${sourceBranch} at ${startedAt}.`);
+
+            - name: Wait for Pub Release verification
+              id: wait_verify
+              uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+              env:
+                  STARTED_AT: ${{ steps.dispatch_verify.outputs.started_at }}
+              with:
+                  script: |
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+                      const sourceBranch = process.env.SOURCE_BRANCH;
+                      const startedAt = Date.parse(process.env.STARTED_AT || '');
+
+                      if (!Number.isFinite(startedAt)) {
+                        core.setFailed(`Invalid STARTED_AT value: ${process.env.STARTED_AT || '<empty>'}`);
+                        return;
+                      }
+
+                      const timeoutMs = 140 * 60 * 1000;
+                      const pollIntervalMs = 20 * 1000;
+                      const deadline = Date.now() + timeoutMs;
+                      let targetRun = null;
+
+                      while (Date.now() < deadline) {
+                        const runsResp = await github.rest.actions.listWorkflowRuns({
+                          owner,
+                          repo,
+                          workflow_id: 'pub-release.yml',
+                          event: 'workflow_dispatch',
+                          branch: sourceBranch,
+                          per_page: 30,
+                        });
+
+                        const candidates = runsResp.data.workflow_runs
+                          .filter((run) => Date.parse(run.created_at) >= startedAt - 60_000)
+                          .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+
+                        targetRun = candidates.find((run) => run.actor?.login === context.actor) || candidates[0] || null;
+
+                        if (targetRun) {
+                          core.info(`Observed Pub Release run #${targetRun.run_number} (${targetRun.status}/${targetRun.conclusion || 'n/a'}): ${targetRun.html_url}`);
+                          if (targetRun.status === 'completed') {
+                            core.setOutput('run_id', String(targetRun.id));
+                            core.setOutput('run_url', targetRun.html_url);
+                            core.setOutput('conclusion', targetRun.conclusion || 'unknown');
+
+                            if (targetRun.conclusion !== 'success') {
+                              core.setFailed(`Pub Release verification failed with conclusion=${targetRun.conclusion}. ${targetRun.html_url}`);
+                            }
+                            return;
+                          }
+                        }
+
+                        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+                      }
+
+                      core.setFailed('Timed out waiting for Pub Release verification workflow completion.');
+
+            - name: Create or update promotion PR
+              id: pr
+              uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+              env:
+                  VERIFY_RUN_URL: ${{ steps.wait_verify.outputs.run_url }}
+              with:
+                  script: |
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+                      const source = process.env.SOURCE_BRANCH;
+                      const target = process.env.TARGET_BRANCH;
+                      const title = process.env.PROMOTION_PR_TITLE;
+                      const verificationUrl = process.env.VERIFY_RUN_URL || 'n/a';
+                      const nowIso = new Date().toISOString();
+
+                      const body = [
+                        '## Release Promotion',
+                        '',
+                        `Promote \`${source}\` to \`${target}\` after successful release verification.`,
+                        '',
+                        `- Verification workflow: ${verificationUrl}`,
+                        `- Requested by: @${context.actor}`,
+                        `- Generated at: ${nowIso}`,
+                        '',
+                        'Merge policy alignment:',
+                        '- One maintainer approval required',
+                        '- Required checks must pass',
+                        '- Rebase merge preferred to preserve contributor commit authorship',
+                      ].join('\n');
+
+                      const pulls = await github.rest.pulls.list({
+                        owner,
+                        repo,
+                        state: 'open',
+                        base: target,
+                        head: `${owner}:${source}`,
+                        per_page: 10,
+                      });
+
+                      let pr;
+                      if (pulls.data.length > 0) {
+                        pr = pulls.data[0];
+                        const updated = await github.rest.pulls.update({
+                          owner,
+                          repo,
+                          pull_number: pr.number,
+                          title,
+                          body,
+                        });
+                        pr = updated.data;
+                        core.info(`Updated existing promotion PR #${pr.number}.`);
+                      } else {
+                        const created = await github.rest.pulls.create({
+                          owner,
+                          repo,
+                          head: source,
+                          base: target,
+                          title,
+                          body,
+                          maintainer_can_modify: true,
+                        });
+                        pr = created.data;
+                        core.info(`Created promotion PR #${pr.number}.`);
+                      }
+
+                      core.setOutput('number', String(pr.number));
+                      core.setOutput('url', pr.html_url);
+                      core.setOutput('node_id', pr.node_id);
+
+            - name: Enable auto-merge (rebase)
+              if: inputs.auto_merge == true
+              uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+              env:
+                  PR_NODE_ID: ${{ steps.pr.outputs.node_id }}
+              with:
+                  script: |
+                      const prNodeId = process.env.PR_NODE_ID;
+                      if (!prNodeId) {
+                        core.setFailed('Missing PR_NODE_ID for auto-merge.');
+                        return;
+                      }
+
+                      try {
+                        await github.graphql(
+                          `mutation EnableAutoMerge($pullRequestId: ID!) {
+                            enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: REBASE}) {
+                              pullRequest {
+                                number
+                                autoMergeRequest {
+                                  enabledAt
+                                  mergeMethod
+                                }
+                              }
+                            }
+                          }`,
+                          { pullRequestId: prNodeId },
+                        );
+                        core.info('Enabled auto-merge (REBASE) on promotion PR.');
+                      } catch (error) {
+                        core.warning(`Auto-merge could not be enabled automatically: ${error.message}`);
+                      }
+
+            - name: Publish promotion summary
+              uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+              env:
+                  PR_URL: ${{ steps.pr.outputs.url }}
+                  VERIFY_RUN_URL: ${{ steps.wait_verify.outputs.run_url }}
+                  AUTO_MERGE_REQUESTED: ${{ inputs.auto_merge }}
+              with:
+                  script: |
+                      await core.summary
+                        .addHeading('Release Promotion Ready')
+                        .addRaw(`- Source: \`${process.env.SOURCE_BRANCH}\`\n`)
+                        .addRaw(`- Target: \`${process.env.TARGET_BRANCH}\`\n`)
+                        .addRaw(`- Verification run: ${process.env.VERIFY_RUN_URL}\n`)
+                        .addRaw(`- Promotion PR: ${process.env.PR_URL}\n`)
+                        .addRaw(`- Auto-merge requested: ${process.env.AUTO_MERGE_REQUESTED}\n`)
+                        .addRaw('')
+                        .addRaw('Final merge still follows branch protection (approval + required checks).\n')
+                        .write();
