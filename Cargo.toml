@@ -4,6 +4,7 @@ members = [
     "crates/robot-kit",
     "crates/zeroclaw-types",
     "crates/zeroclaw-core",
+    "crates/aardvark-sys",
 ]
 resolver = "2"
 
@@ -83,6 +84,9 @@ wasmi = { version = "1.0.9", optional = true, default-features = true }
 anyhow = "1.0"
 thiserror = "2.0"
 aho-corasick = "1.1"
+
+# Aardvark I2C/SPI/GPIO USB adapter (Total Phase) — stub when SDK absent
+aardvark-sys = { path = "crates/aardvark-sys" }
 
 # UUID generation
 uuid = { version = "1.11", default-features = false, features = ["v4", "std"] }

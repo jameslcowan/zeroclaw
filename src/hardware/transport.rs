@@ -48,6 +48,8 @@ pub enum TransportKind {
     Uf2,
     /// Direct Linux GPIO/I2C/SPI (rppal, sysfs).
     Native,
+    /// Total Phase Aardvark USB adapter (I2C/SPI/GPIO via C library).
+    Aardvark,
 }
 
 impl std::fmt::Display for TransportKind {
@@ -57,6 +59,7 @@ impl std::fmt::Display for TransportKind {
             Self::Swd => write!(f, "swd"),
             Self::Uf2 => write!(f, "uf2"),
             Self::Native => write!(f, "native"),
+            Self::Aardvark => write!(f, "aardvark"),
         }
     }
 }
