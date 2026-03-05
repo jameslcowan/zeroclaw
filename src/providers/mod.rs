@@ -20,6 +20,7 @@ pub mod anthropic;
 pub mod bedrock;
 pub mod compatible;
 pub mod copilot;
+pub mod error_parser;
 pub mod gemini;
 pub mod ollama;
 pub mod openai;
