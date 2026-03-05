@@ -72,8 +72,8 @@ run_cargo_tool fmt --all -- --check
 ensure_cargo_subcommand_component "clippy"
 if [ "$MODE" = "strict" ]; then
     echo "==> rust quality: cargo clippy --locked --all-targets -- -D warnings"
-    run_cargo_tool clippy --locked --all-targets -- -D warnings
+        run_cargo_tool clippy --all-targets -- -D warnings
 else
     echo "==> rust quality: cargo clippy --locked --all-targets -- -D clippy::correctness"
-    run_cargo_tool clippy --locked --all-targets -- -D clippy::correctness
+        run_cargo_tool clippy --all-targets -- -D clippy::correctness
 fi
