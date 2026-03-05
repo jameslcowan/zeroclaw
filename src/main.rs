@@ -150,13 +150,9 @@ struct Cli {
 enum Commands {
     /// Initialize your workspace and configuration
     Onboard {
-        /// Run the full interactive wizard (default is quick setup)
+        /// Run the full-screen TUI onboarding wizard (default is quick setup)
         #[arg(long)]
         interactive: bool,
-
-        /// Run the full-screen TUI onboarding flow (ratatui)
-        #[arg(long)]
-        interactive_ui: bool,
 
         /// Overwrite existing config without confirmation
         #[arg(long)]
@@ -166,7 +162,7 @@ enum Commands {
         #[arg(long)]
         channels_only: bool,
 
-        /// API key (used in quick mode, ignored with --interactive or --interactive-ui)
+        /// API key (used in quick mode, ignored with --interactive)
         #[arg(long)]
         api_key: Option<String>,
 
@@ -835,14 +831,12 @@ async fn main() -> Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    // Onboard runs quick setup by default, interactive wizard with --interactive,
-    // or full-screen TUI with --interactive-ui.
+    // Onboard runs quick setup by default, or full-screen TUI wizard with --interactive.
     // The onboard wizard uses reqwest::blocking internally, which creates its own
     // Tokio runtime. To avoid "Cannot drop a runtime in a context where blocking is
     // not allowed", we run the wizard on a blocking thread via spawn_blocking.
     if let Commands::Onboard {
         interactive,
-        interactive_ui,
         force,
         channels_only,
         api_key,
@@ -856,7 +850,6 @@ async fn main() -> Result<()> {
     } = &cli.command
     {
         let interactive = *interactive;
-        let interactive_ui = *interactive_ui;
         let force = *force;
         let channels_only = *channels_only;
         let api_key = api_key.clone();
@@ -870,16 +863,10 @@ async fn main() -> Result<()> {
         let openclaw_migration_enabled =
             migrate_openclaw || openclaw_source.is_some() || openclaw_config.is_some();
 
-        if interactive && interactive_ui {
-            bail!("Use either --interactive or --interactive-ui, not both");
-        }
         if interactive && channels_only {
             bail!("Use either --interactive or --channels-only, not both");
         }
-        if interactive_ui && channels_only {
-            bail!("Use either --interactive-ui or --channels-only, not both");
-        }
-        if interactive_ui
+        if interactive
             && (api_key.is_some()
                 || provider.is_some()
                 || model.is_some()
@@ -887,7 +874,7 @@ async fn main() -> Result<()> {
                 || no_totp)
         {
             bail!(
-                "--interactive-ui does not accept --api-key, --provider, --model, --memory, or --no-totp"
+                "--interactive does not accept --api-key, --provider, --model, --memory, or --no-totp"
             );
         }
         if channels_only
@@ -909,18 +896,8 @@ async fn main() -> Result<()> {
         }
         let config = if channels_only {
             Box::pin(onboard::run_channels_repair_wizard()).await
-        } else if interactive_ui {
-            Box::pin(onboard::run_wizard_tui_with_migration(
-                force,
-                onboard::OpenClawOnboardMigrationOptions {
-                    enabled: openclaw_migration_enabled,
-                    source_workspace: openclaw_source,
-                    source_config: openclaw_config,
-                },
-            ))
-            .await
         } else if interactive {
-            Box::pin(onboard::run_wizard_with_migration(
+            Box::pin(onboard::run_wizard_tui_with_migration(
                 force,
                 onboard::OpenClawOnboardMigrationOptions {
                     enabled: openclaw_migration_enabled,
@@ -2487,18 +2464,13 @@ mod tests {
     }
 
     #[test]
-    fn onboard_cli_accepts_interactive_ui_flag() {
-        let cli = Cli::try_parse_from(["zeroclaw", "onboard", "--interactive-ui"])
-            .expect("onboard --interactive-ui should parse");
+    fn onboard_cli_interactive_uses_tui() {
+        let cli = Cli::try_parse_from(["zeroclaw", "onboard", "--interactive"])
+            .expect("onboard --interactive should parse");
 
         match cli.command {
-            Commands::Onboard {
-                interactive,
-                interactive_ui,
-                ..
-            } => {
-                assert!(!interactive);
-                assert!(interactive_ui);
+            Commands::Onboard { interactive, .. } => {
+                assert!(interactive);
             }
             other => panic!("expected onboard command, got {other:?}"),
         }

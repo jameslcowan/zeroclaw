@@ -14,7 +14,7 @@
 **Λύση**:
 Εκτελέστε την αυτόματη εγκατάσταση:
 ```bash
-./bootstrap.sh --install-rust
+./install.sh --install-rust
 ```
 Εναλλακτικά, επισκεφθείτε τη διεύθυνση [rustup.rs](https://rustup.rs/).
 
@@ -24,7 +24,7 @@
 **Λύση**:
 Εγκαταστήστε τις εξαρτήσεις συστήματος (system dependencies):
 ```bash
-./bootstrap.sh --install-system-deps
+./install.sh --install-system-deps
 ```
 
 ### Περιορισμένοι Πόροι (RAM / Disk Space)
@@ -33,7 +33,7 @@
 **Λύση**:
 Χρησιμοποιήστε προ-μεταγλωττισμένα (prebuilt) αρχεία:
 ```bash
-./bootstrap.sh --prefer-prebuilt
+./install.sh --prefer-prebuilt
 ```
 Εάν επιθυμείτε μεταγλώττιση από τον πηγαίο κώδικα σε περιβάλλον με περιορισμένη μνήμη, περιορίστε τον παραλληλισμό:
 ```bash

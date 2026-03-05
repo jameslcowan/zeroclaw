@@ -15,7 +15,7 @@ Symptom:
 Fix:
 
 ```bash
-./bootstrap.sh --install-rust
+./install.sh --install-rust
 ```
 
 Or install from <https://rustup.rs/>.
@@ -29,7 +29,7 @@ Symptom:
 Fix:
 
 ```bash
-./bootstrap.sh --install-system-deps
+./install.sh --install-system-deps
 ```
 
 ### Build fails on low-RAM / low-disk hosts
@@ -48,13 +48,13 @@ Why this happens:
 Preferred path for constrained machines:
 
 ```bash
-./bootstrap.sh --prefer-prebuilt
+./install.sh --prefer-prebuilt
 ```
 
 Binary-only mode (no source fallback):
 
 ```bash
-./bootstrap.sh --prebuilt-only
+./install.sh --prebuilt-only
 ```
 
 If you must compile from source on constrained hosts:

@@ -19,7 +19,7 @@ brew install zeroclaw
    ```
 2. **Εκτέλεση του bootstrap**:
    ```bash
-   ./bootstrap.sh
+   ./install.sh
    ```
 
 ### Λειτουργία Σενάριου
@@ -34,22 +34,22 @@ brew install zeroclaw
 
 - **Χρήση προ-μεταγλωττισμένων (εάν υπάρχουν)**:
   ```bash
-  ./bootstrap.sh --prefer-prebuilt
+  ./install.sh --prefer-prebuilt
   ```
 - **Αποκλειστική χρήση προ-μεταγλωττισμένων**:
   ```bash
-  ./bootstrap.sh --prebuilt-only
+  ./install.sh --prebuilt-only
   ```
 - **Επιβολή μεταγλώττισης από πηγαίο κώδικα**:
   ```bash
-  ./bootstrap.sh --force-source-build
+  ./install.sh --force-source-build
   ```
 
 ## Προετοιμασία Περιβάλλοντος (Dual-mode)
 
 Για νέα συστήματα που δεν διαθέτουν το σύνολο εργαλείων Rust, χρησιμοποιήστε τις παρακάτω σημαίες:
 ```bash
-./bootstrap.sh --install-system-deps --install-rust
+./install.sh --install-system-deps --install-rust
 ```
 - `--install-system-deps`: Εγκαθιστά τις απαραίτητες εξαρτήσεις συστήματος (ενδέχεται να απαιτεί `sudo`).
 - `--install-rust`: Εγκαθιστά τη Rust μέσω του `rustup`.
@@ -67,20 +67,20 @@ curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main/scripts
 ### Μέσω Docker / Podman
 
 ```bash
-./bootstrap.sh --docker
+./install.sh --docker
 ```
 Το σενάριο θα δημιουργήσει μια τοπική εικόνα Docker και θα ξεκινήσει τη διαδικασία onboarding. Οι ρυθμίσεις αποθηκεύονται στον κατάλογο `./.zeroclaw-docker`.
 
 ### Μη Διαδραστική Εισαγωγή
 
 ```bash
-./bootstrap.sh --onboard --api-key "sk-..." --provider openrouter
+./install.sh --onboard --api-key "sk-..." --provider openrouter
 ```
 
 ### Διαδραστική Εισαγωγή
 
 ```bash
-./bootstrap.sh --interactive-onboard
+./install.sh --interactive-onboard
 ```
 
 ## Αναφορά Σημαιών CLI
@@ -93,7 +93,7 @@ curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main/scripts
 
 Για την πλήρη λίστα επιλογών, εκτελέστε:
 ```bash
-./bootstrap.sh --help
+./install.sh --help
 ```
 
 ## Σχετική Τεκμηρίωση

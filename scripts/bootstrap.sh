@@ -1244,7 +1244,7 @@ run_docker_bootstrap() {
     local onboard_cmd=()
     if [[ "$INTERACTIVE_ONBOARD" == true ]]; then
       info "Launching TUI onboarding in container"
-      onboard_cmd=(onboard --interactive-ui)
+      onboard_cmd=(onboard --interactive)
     else
       if [[ -z "$API_KEY" ]]; then
         cat <<'MSG'
@@ -1719,7 +1719,7 @@ if [[ "$RUN_ONBOARD" == true ]]; then
 
   if [[ "$INTERACTIVE_ONBOARD" == true ]]; then
     info "Running TUI onboarding"
-    "$ZEROCLAW_BIN" onboard --interactive-ui
+    "$ZEROCLAW_BIN" onboard --interactive
   else
     if [[ -z "$API_KEY" ]]; then
       cat <<'MSG'

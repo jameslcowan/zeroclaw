@@ -62,7 +62,7 @@
 
 ### 6) Συνεισφορά και CI
 
-- [../CONTRIBUTING.el.md](../CONTRIBUTING.el.md)
+- [i18n/el/CONTRIBUTING.md](i18n/el/CONTRIBUTING.md)
 - [i18n/el/pr-workflow.md](i18n/el/pr-workflow.md)
 - [i18n/el/reviewer-playbook.md](i18n/el/reviewer-playbook.md)
 - [i18n/el/ci-map.md](i18n/el/ci-map.md)

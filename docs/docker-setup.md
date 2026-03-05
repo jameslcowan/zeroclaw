@@ -17,7 +17,7 @@ git clone https://github.com/zeroclaw-labs/zeroclaw.git
 cd zeroclaw
 
 # Run bootstrap with Docker mode
-./bootstrap.sh --docker
+./install.sh --docker
 ```
 
 This builds the Docker image and prepares the data directory. Onboarding is **not** run by default in Docker mode.
@@ -77,7 +77,7 @@ By default, Docker mode stores data in:
 
 Override with environment variable:
 ```bash
-ZEROCLAW_DOCKER_DATA_DIR=/custom/path ./bootstrap.sh --docker
+ZEROCLAW_DOCKER_DATA_DIR=/custom/path ./install.sh --docker
 ```
 
 ### Pre-seeding Configuration
@@ -85,13 +85,13 @@ ZEROCLAW_DOCKER_DATA_DIR=/custom/path ./bootstrap.sh --docker
 If you have an existing `config.toml`, you can seed it during bootstrap:
 
 ```bash
-./bootstrap.sh --docker --docker-config ./my-config.toml
+./install.sh --docker --docker-config ./my-config.toml
 ```
 
 ### Using Podman
 
 ```bash
-ZEROCLAW_CONTAINER_CLI=podman ./bootstrap.sh --docker
+ZEROCLAW_CONTAINER_CLI=podman ./install.sh --docker
 ```
 
 ## Common Commands
@@ -113,7 +113,7 @@ Replace `...` with the volume mounts shown in [Interactive Mode](#interactive-mo
 To completely reset your Docker ZeroClaw environment:
 
 ```bash
-./bootstrap.sh --docker --docker-reset
+./install.sh --docker --docker-reset
 ```
 
 This removes:
@@ -142,7 +142,7 @@ docker run --rm -it \
 
 ### No Containers Running After Bootstrap
 
-Running `./bootstrap.sh --docker` only builds the image and prepares the data directory. It does **not** start a container. To start ZeroClaw:
+Running `./install.sh --docker` only builds the image and prepares the data directory. It does **not** start a container. To start ZeroClaw:
 
 1. Run onboarding: `./zeroclaw_install.sh --docker --interactive-onboard`
 2. Start daemon: `./zeroclaw_install.sh --docker --docker-daemon`

@@ -79,7 +79,7 @@
 ### 6) Διαδικασίες Συνεισφοράς και CI
 
 - [contributing/README.md](contributing/README.md)
-- [../../../CONTRIBUTING.el.md](../../../CONTRIBUTING.el.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
 - [pr-workflow.md](pr-workflow.md)
 - [reviewer-playbook.md](reviewer-playbook.md)
 - [ci-map.md](ci-map.md)

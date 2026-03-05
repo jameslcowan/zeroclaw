@@ -34,7 +34,7 @@ zeroclaw --version
 
 ```bash
 git pull --ff-only
-./bootstrap.sh --prefer-prebuilt
+./install.sh --prefer-prebuilt
 zeroclaw --version
 ```
 

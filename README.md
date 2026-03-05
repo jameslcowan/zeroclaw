@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="zeroclaw.png" alt="ZeroClaw" width="200" />
+  <img src="assets/zeroclaw.png" alt="ZeroClaw" width="200" />
 </p>
 
 <h1 align="center">ZeroClaw 🦀</h1>
@@ -100,10 +100,10 @@ brew install zeroclaw
 ```bash
 git clone https://github.com/zeroclaw-labs/zeroclaw.git
 cd zeroclaw
-./bootstrap.sh
+./install.sh
 ```
 
-> **Note:** Source builds require ~2GB RAM and ~6GB disk. For resource-constrained systems, use `./bootstrap.sh --prefer-prebuilt` to download a pre-built binary instead.
+> **Note:** Source builds require ~2GB RAM and ~6GB disk. For resource-constrained systems, use `./install.sh --prefer-prebuilt` to download a pre-built binary instead.
 
 ### Option 3: Cargo Install
 
@@ -151,7 +151,7 @@ Local machine quick benchmark (macOS arm64, Feb 2026) normalized for 0.8GHz edge
 > Notes: ZeroClaw results are measured on release builds using `/usr/bin/time -l`. OpenClaw requires Node.js runtime (typically ~390MB additional memory overhead), while NanoBot requires Python runtime. PicoClaw and ZeroClaw are static binaries. The RAM figures above are runtime memory; build-time compilation requirements are higher.
 
 <p align="center">
-  <img src="zero-claw.jpeg" alt="ZeroClaw vs OpenClaw Comparison" width="800" />
+  <img src="assets/zero-claw.png" alt="ZeroClaw vs OpenClaw Comparison" width="800" />
 </p>
 
 ---

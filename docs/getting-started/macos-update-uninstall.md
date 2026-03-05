@@ -41,7 +41,7 @@ From your local repository checkout:
 
 ```bash
 git pull --ff-only
-./bootstrap.sh --prefer-prebuilt
+./install.sh --prefer-prebuilt
 zeroclaw --version
 ```
 

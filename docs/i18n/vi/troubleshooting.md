@@ -15,7 +15,7 @@ Triệu chứng:
 Khắc phục:
 
 ```bash
-./bootstrap.sh --install-rust
+./install.sh --install-rust
 ```
 
 Hoặc cài từ <https://rustup.rs/>.
@@ -29,7 +29,7 @@ Triệu chứng:
 Khắc phục:
 
 ```bash
-./bootstrap.sh --install-system-deps
+./install.sh --install-system-deps
 ```
 
 ### Build thất bại trên máy ít RAM / ít dung lượng
@@ -48,13 +48,13 @@ Nguyên nhân:
 Cách tốt nhất cho máy hạn chế tài nguyên:
 
 ```bash
-./bootstrap.sh --prefer-prebuilt
+./install.sh --prefer-prebuilt
 ```
 
 Chế độ chỉ dùng binary (không build từ nguồn):
 
 ```bash
-./bootstrap.sh --prebuilt-only
+./install.sh --prebuilt-only
 ```
 
 Nếu bắt buộc phải build từ nguồn trên máy yếu:

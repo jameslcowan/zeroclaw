@@ -64,7 +64,7 @@
 
 ### Συνεισφέροντες και Συντηρητές (Maintainers)
 
-- [../../../CONTRIBUTING.el.md](../../../CONTRIBUTING.el.md) — Οδηγός συνεισφοράς.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Οδηγός συνεισφοράς.
 - [pr-workflow.md](pr-workflow.md) — Διαδικασία υποβολής Pull Requests.
 - [reviewer-playbook.md](reviewer-playbook.md) — Οδηγός για αναθεωρητές κώδικα.
 - [ci-map.md](ci-map.md) — Διάγραμμα διαδικασιών CI.
