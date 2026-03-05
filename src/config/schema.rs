@@ -1,6 +1,6 @@
 use crate::config::traits::ChannelConfig;
 use crate::providers::{is_glm_alias, is_zai_alias};
-use crate::security::{AutonomyLevel, DomainMatcher};
+use crate::security::{AutonomyLevel, DomainMatcher, ShellRedirectPolicy};
 use anyhow::{Context, Result};
 use directories::UserDirs;
 use schemars::JsonSchema;
@@ -2296,6 +2296,13 @@ pub struct AutonomyConfig {
     #[serde(default = "default_true")]
     pub block_high_risk_commands: bool,
 
+    /// Redirect handling mode for shell commands.
+    ///
+    /// - `block` (default): reject unquoted redirects.
+    /// - `strip`: normalize common stderr/null redirects before execution.
+    #[serde(default)]
+    pub shell_redirect_policy: ShellRedirectPolicy,
+
     /// Additional environment variables allowed for shell tool subprocesses.
     ///
     /// These names are explicitly allowlisted and merged with the built-in safe
@@ -2450,6 +2457,7 @@ impl Default for AutonomyConfig {
             max_cost_per_day_cents: 500,
             require_approval_for_medium_risk: true,
             block_high_risk_commands: true,
+            shell_redirect_policy: ShellRedirectPolicy::Block,
             shell_env_passthrough: vec![],
             auto_approve: default_auto_approve(),
             always_ask: default_always_ask(),
@@ -6638,6 +6646,7 @@ mod tests {
         assert_eq!(a.max_cost_per_day_cents, 500);
         assert!(a.require_approval_for_medium_risk);
         assert!(a.block_high_risk_commands);
+        assert_eq!(a.shell_redirect_policy, ShellRedirectPolicy::Block);
         assert!(a.shell_env_passthrough.is_empty());
         assert!(a.non_cli_excluded_tools.contains(&"shell".to_string()));
         assert!(a.non_cli_excluded_tools.contains(&"delegate".to_string()));
@@ -6660,6 +6669,7 @@ always_ask = []
 allowed_roots = []
 "#;
         let parsed: AutonomyConfig = toml::from_str(raw).unwrap();
+        assert_eq!(parsed.shell_redirect_policy, ShellRedirectPolicy::Block);
         assert!(parsed.non_cli_excluded_tools.contains(&"shell".to_string()));
         assert!(parsed
             .non_cli_excluded_tools
@@ -6825,6 +6835,7 @@ default_temperature = 0.7
                 max_cost_per_day_cents: 1000,
                 require_approval_for_medium_risk: false,
                 block_high_risk_commands: true,
+                shell_redirect_policy: ShellRedirectPolicy::Strip,
                 shell_env_passthrough: vec!["DATABASE_URL".into()],
                 auto_approve: vec!["file_read".into()],
                 always_ask: vec![],

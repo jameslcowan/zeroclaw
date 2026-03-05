@@ -414,6 +414,8 @@ async fn run_job_command_with_timeout(
     job: &CronJob,
     timeout: Duration,
 ) -> (bool, String) {
+    let effective_command = security.apply_shell_redirect_policy(&job.command);
+
     if !security.can_act() {
         return (
             false,
@@ -428,7 +430,7 @@ async fn run_job_command_with_timeout(
         );
     }
 
-    if !security.is_command_allowed(&job.command) {
+    if !security.is_command_allowed(&effective_command) {
         return (
             false,
             format!(
@@ -438,7 +440,7 @@ async fn run_job_command_with_timeout(
         );
     }
 
-    if let Some(path) = security.forbidden_path_argument(&job.command) {
+    if let Some(path) = security.forbidden_path_argument(&effective_command) {
         return (
             false,
             format!("blocked by security policy: forbidden path argument: {path}"),
@@ -454,7 +456,7 @@ async fn run_job_command_with_timeout(
 
     let child = match Command::new("sh")
         .arg("-lc")
-        .arg(&job.command)
+        .arg(&effective_command)
         .current_dir(&config.workspace_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -491,7 +493,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::cron::{self, DeliveryConfig};
-    use crate::security::SecurityPolicy;
+    use crate::security::{SecurityPolicy, ShellRedirectPolicy};
     use chrono::{Duration as ChronoDuration, Utc};
     use std::sync::OnceLock;
     use tempfile::TempDir;
@@ -692,6 +694,20 @@ mod tests {
         assert!(!success);
         assert!(output.contains("blocked by security policy"));
         assert!(output.contains("command not allowed"));
+    }
+
+    #[tokio::test]
+    async fn run_job_command_strip_policy_normalizes_common_stderr_redirects() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = test_config(&tmp).await;
+        config.autonomy.allowed_commands = vec!["echo".into()];
+        config.autonomy.shell_redirect_policy = ShellRedirectPolicy::Strip;
+        let job = test_job("echo scheduler-strip 2>&1");
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+        let (success, output) = run_job_command(&config, &security, &job).await;
+        assert!(success);
+        assert!(output.contains("scheduler-strip"));
     }
 
     #[tokio::test]
