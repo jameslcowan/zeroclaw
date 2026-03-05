@@ -35,7 +35,16 @@ use std::path::PathBuf;
 #[ignore = "requires live Gemini OAuth credentials with refresh_token"]
 async fn gemini_warmup_refreshes_expired_oauth_token() -> Result<()> {
     // Find ~/.zeroclaw/auth-profiles.json
-    let home = env::var("HOME").expect("HOME env var not set");
+    let Some(home) = zeroclaw::test_capabilities::home_dir_from_env() else {
+        eprintln!("⚠️  Skipping test: neither HOME nor USERPROFILE is set");
+        return Ok(());
+    };
+
+    if let Err(reason) = zeroclaw::test_capabilities::check_writable_dir(&home) {
+        eprintln!("⚠️  Skipping test: home directory is not writable ({reason})");
+        return Ok(());
+    }
+
     let zeroclaw_dir = PathBuf::from(home).join(".zeroclaw");
     let auth_profiles_path = zeroclaw_dir.join("auth-profiles.json");
 
