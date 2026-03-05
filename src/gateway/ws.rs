@@ -24,6 +24,7 @@ use axum::{
 
 const EMPTY_WS_RESPONSE_FALLBACK: &str =
     "Tool execution completed, but the model returned no final text response. Please ask me to summarize the result.";
+const WS_CHAT_SUBPROTOCOL: &str = "zeroclaw.v1";
 
 fn sanitize_ws_response(response: &str, tools: &[Box<dyn crate::tools::Tool>]) -> String {
     let sanitized = crate::channels::sanitize_channel_response(response, tools);
@@ -123,13 +124,14 @@ pub async fn handle_ws_chat(
         if !state.pairing.is_authenticated(&token) {
             return (
                 axum::http::StatusCode::UNAUTHORIZED,
-                "Unauthorized — provide Authorization: Bearer <token> or Sec-WebSocket-Protocol: bearer.<token>",
+                "Unauthorized — provide Authorization: Bearer <token> or Sec-WebSocket-Protocol: zeroclaw.v1, bearer.<token>",
             )
                 .into_response();
         }
     }
 
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    ws.protocols([WS_CHAT_SUBPROTOCOL])
+        .on_upgrade(move |socket| handle_socket(socket, state))
         .into_response()
 }
 
@@ -329,6 +331,17 @@ mod tests {
             extract_ws_bearer_token(&headers).as_deref(),
             Some("protocol-token")
         );
+    }
+
+    #[test]
+    fn extract_ws_bearer_token_ignores_protocol_without_bearer_value() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("zeroclaw.v1"),
+        );
+
+        assert!(extract_ws_bearer_token(&headers).is_none());
     }
 
     #[test]
