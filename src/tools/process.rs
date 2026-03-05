@@ -80,6 +80,7 @@ impl ProcessTool {
             .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'command' parameter for spawn action"))?;
+        let effective_command = self.security.apply_shell_redirect_policy(command);
 
         // Check concurrent running process count.
         {
@@ -126,7 +127,7 @@ impl ProcessTool {
             });
         }
 
-        if let Some(path) = self.security.forbidden_path_argument(command) {
+        if let Some(path) = self.security.forbidden_path_argument(&effective_command) {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
@@ -145,7 +146,7 @@ impl ProcessTool {
         // Build command via runtime adapter.
         let mut cmd = match self
             .runtime
-            .build_shell_command(command, &self.security.workspace_dir)
+            .build_shell_command(&effective_command, &self.security.workspace_dir)
         {
             Ok(cmd) => cmd,
             Err(e) => {

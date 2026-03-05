@@ -138,6 +138,7 @@ impl Tool for ShellTool {
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         let command = extract_command_argument(&args)
             .ok_or_else(|| anyhow::anyhow!("Missing 'command' parameter"))?;
+        let effective_command = self.security.apply_shell_redirect_policy(&command);
         let approved = args
             .get("approved")
             .and_then(|v| v.as_bool())
@@ -162,7 +163,7 @@ impl Tool for ShellTool {
             }
         }
 
-        if let Some(path) = self.security.forbidden_path_argument(&command) {
+        if let Some(path) = self.security.forbidden_path_argument(&effective_command) {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
@@ -183,7 +184,7 @@ impl Tool for ShellTool {
         // (CWE-200), then re-add only safe, functional variables.
         let mut cmd = match self
             .runtime
-            .build_shell_command(&command, &self.security.workspace_dir)
+            .build_shell_command(&effective_command, &self.security.workspace_dir)
         {
             Ok(cmd) => cmd,
             Err(e) => {
@@ -228,7 +229,7 @@ impl Tool for ShellTool {
 
                 if let Some(detector) = &self.syscall_detector {
                     let _ = detector.inspect_command_output(
-                        &command,
+                        &effective_command,
                         &stdout,
                         &stderr,
                         output.status.code(),
@@ -266,13 +267,27 @@ mod tests {
     use super::*;
     use crate::config::{AuditConfig, SyscallAnomalyConfig};
     use crate::runtime::{NativeRuntime, RuntimeAdapter};
-    use crate::security::{AutonomyLevel, SecurityPolicy, SyscallAnomalyDetector};
+    use crate::security::{
+        AutonomyLevel, SecurityPolicy, ShellRedirectPolicy, SyscallAnomalyDetector,
+    };
     use tempfile::TempDir;
 
     fn test_security(autonomy: AutonomyLevel) -> Arc<SecurityPolicy> {
         Arc::new(SecurityPolicy {
             autonomy,
             workspace_dir: std::env::temp_dir(),
+            ..SecurityPolicy::default()
+        })
+    }
+
+    fn test_security_with_redirect_policy(
+        autonomy: AutonomyLevel,
+        shell_redirect_policy: ShellRedirectPolicy,
+    ) -> Arc<SecurityPolicy> {
+        Arc::new(SecurityPolicy {
+            autonomy,
+            workspace_dir: std::env::temp_dir(),
+            shell_redirect_policy,
             ..SecurityPolicy::default()
         })
     }
@@ -479,6 +494,56 @@ mod tests {
             .execute(json!({"command": "cat </etc/passwd"}))
             .await
             .expect("input redirection bypass should be blocked");
+        assert!(!result.success);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("not allowed"));
+    }
+
+    #[tokio::test]
+    async fn shell_strip_policy_allows_common_stderr_redirects() {
+        let tool = ShellTool::new(
+            test_security_with_redirect_policy(
+                AutonomyLevel::Supervised,
+                ShellRedirectPolicy::Strip,
+            ),
+            test_runtime(),
+        );
+
+        let merged = tool
+            .execute(json!({"command": "echo redirect-ok 2>&1"}))
+            .await
+            .expect("2>&1 should be normalized under strip policy");
+        assert!(merged.success);
+        assert!(merged.output.contains("redirect-ok"));
+
+        let devnull = tool
+            .execute(json!({"command": "ls definitely_missing_shell_redirect 2>/dev/null"}))
+            .await
+            .expect("2>/dev/null should be normalized under strip policy");
+        assert!(!devnull.success);
+        assert!(devnull
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("definitely_missing_shell_redirect"));
+    }
+
+    #[tokio::test]
+    async fn shell_strip_policy_still_blocks_unsupported_redirects() {
+        let tool = ShellTool::new(
+            test_security_with_redirect_policy(
+                AutonomyLevel::Supervised,
+                ShellRedirectPolicy::Strip,
+            ),
+            test_runtime(),
+        );
+        let result = tool
+            .execute(json!({"command": "echo blocked > out.txt"}))
+            .await
+            .expect("unsupported redirect should still be blocked");
         assert!(!result.success);
         assert!(result
             .error
