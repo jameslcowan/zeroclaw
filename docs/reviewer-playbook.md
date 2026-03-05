@@ -119,6 +119,14 @@ Prefer checklist-style comments with one explicit outcome:
 
 Avoid vague comments that create avoidable back-and-forth latency.
 
+### 3.5 Contribution attribution and merge method
+
+- Do not squash contributor PRs; squash merge is disabled by repository policy.
+- Prefer merge commit to preserve original commit authorship on contributor work.
+- Rebase merge is allowed when commit history is already clean and no attribution is lost.
+- Keep maintainer role focused on review and approval; do not rewrite contributor commits unless a fix is required.
+- If maintainer follow-up commits are required, keep contributor commits intact and avoid replacing authorship history.
+
 ---
 
 ## 4. Issue Triage and Backlog Governance

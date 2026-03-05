@@ -195,7 +195,7 @@ To keep review throughput high without lowering quality, every PR should map to 
 
 | Track | Typical scope | Required review depth |
 |---|---|---|
-| **Track A (Low risk)** | docs/tests/chore, isolated refactors, no security/runtime/CI impact | 1 maintainer review + green `CI Required Gate` |
+| **Track A (Low risk)** | docs/tests/chore, isolated refactors, no security/runtime/CI impact | 1 maintainer review + green `CI Required Gate` and `Security Required Gate` |
 | **Track B (Medium risk)** | providers/channels/memory/tools behavior changes | 1 subsystem-aware review + explicit validation evidence |
 | **Track C (High risk)** | `src/security/**`, `src/runtime/**`, `src/gateway/**`, `.github/workflows/**`, access-control boundaries | 2-pass review (fast triage + deep risk review), rollback plan required |
 
@@ -245,7 +245,7 @@ Before requesting review, ensure all of the following are true:
 
 A PR is merge-ready when:
 
-- `CI Required Gate` is green.
+- `CI Required Gate` and `Security Required Gate` are green.
 - Required reviewers approved (including CODEOWNERS paths).
 - Risk level matches changed paths (`risk: low/medium/high`).
 - User-visible behavior, migration, and rollback notes are complete.
@@ -533,13 +533,18 @@ Recommended scope keys in commit titles:
 
 ## Maintainer Merge Policy
 
-- Require passing `CI Required Gate` before merge.
+- Require passing `CI Required Gate` and `Security Required Gate` before merge.
 - Require docs quality checks when docs are touched.
-- Require review approval for non-trivial changes.
+- Require exactly 1 maintainer approval before merge.
+- Maintainer approver set: `@theonlyhennygod`, `@JordanTheJet`, `@chumyin`.
+- No self-approval (GitHub enforced).
 - Require CODEOWNERS review for protected paths.
+- Merge only when the PR has no conflicts with the target branch.
 - Use risk labels to determine review depth, scope labels (`core`, `provider`, `channel`, `security`, etc.) to route ownership, and module labels (`<module>:<component>`, e.g. `channel:telegram`, `provider:kimi`, `tool:shell`) to route subsystem expertise.
 - Contributor tier labels are auto-applied on PRs and issues by merged PR count: `experienced contributor` (>=10), `principal contributor` (>=20), `distinguished contributor` (>=50). Treat them as read-only automation labels; manual edits are auto-corrected.
-- Prefer squash merge with conventional commit title.
+- Squash merge is disabled to preserve contributor attribution.
+- Preferred merge method for contributor PRs: rebase and merge.
+- Merge commit is allowed when rebase is not appropriate.
 - Revert fast on regressions; re-land with tests.
 
 ## License
