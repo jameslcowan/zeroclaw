@@ -70,6 +70,7 @@ env:
     CARGO_TERM_COLOR: always
 
 jobs:
+    # Run all security lanes on the same Blacksmith-tagged Linux pool for consistent routing.
     audit:
         name: Security Audit
         runs-on: [self-hosted, Linux, X64, blacksmith-2vcpu-ubuntu-2404]

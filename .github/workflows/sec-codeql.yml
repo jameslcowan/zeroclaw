@@ -61,6 +61,7 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
+                  # Keep both lanes on the Blacksmith Linux pool to avoid provider-specific routing.
                   branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
                   if [[ "$branch" == release/* ]]; then
                     echo 'labels=["self-hosted","Linux","X64","blacksmith-2vcpu-ubuntu-2404"]' >> "$GITHUB_OUTPUT"
