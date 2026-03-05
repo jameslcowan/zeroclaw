@@ -2372,6 +2372,8 @@ mod tests {
     use crate::observability::NoopObserver;
     use crate::providers::traits::ProviderCapabilities;
     use crate::providers::ChatResponse;
+    use crate::runtime::NativeRuntime;
+    use crate::security::{AutonomyLevel, SecurityPolicy, ShellRedirectPolicy};
     use tempfile::TempDir;
 
     struct NonVisionProvider {
@@ -3207,6 +3209,85 @@ mod tests {
             .expect("prompt-mode tool result payload should be present");
         assert!(tool_results.content.contains("counted:A"));
         assert!(tool_results.content.contains("Skipped duplicate tool call"));
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_shell_strip_policy_handles_repeated_redirect_calls() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"shell","arguments":{"command":"echo redirect-loop-ok 2>&1"}}
+</tool_call>"#,
+            r#"<tool_call>
+{"name":"shell","arguments":{"command":"echo redirect-loop-ok 2>&1"}}
+</tool_call>"#,
+            r#"<tool_call>
+{"name":"shell","arguments":{"command":"echo redirect-loop-ok 2>&1"}}
+</tool_call>"#,
+            "done after shell redirect retries",
+        ]);
+
+        let workspace = TempDir::new().expect("temp workspace");
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Full,
+            workspace_dir: workspace.path().to_path_buf(),
+            shell_redirect_policy: ShellRedirectPolicy::Strip,
+            ..SecurityPolicy::default()
+        });
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(crate::tools::ShellTool::new(
+            Arc::clone(&security),
+            Arc::new(NativeRuntime::new()),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("run repeated shell redirects"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            6,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("loop should complete when strip policy normalizes redirects");
+
+        assert_eq!(result, "done after shell redirect retries");
+
+        let tool_result_messages: Vec<_> = history
+            .iter()
+            .filter(|msg| msg.role == "user" && msg.content.starts_with("[Tool results]"))
+            .collect();
+        assert_eq!(
+            tool_result_messages.len(),
+            3,
+            "expected one tool result payload per scripted shell call"
+        );
+        for message in tool_result_messages {
+            assert!(
+                message.content.contains("<tool_result name=\"shell\">"),
+                "tool results should include shell execution payloads"
+            );
+            assert!(
+                !message
+                    .content
+                    .contains("Command not allowed by security policy"),
+                "strip policy should avoid redirect-policy rejections"
+            );
+        }
     }
 
     #[tokio::test]
