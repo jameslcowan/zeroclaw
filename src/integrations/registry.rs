@@ -290,7 +290,16 @@ pub fn all_integrations() -> Vec<IntegrationEntry> {
             name: "LM Studio",
             description: "Local model server",
             category: IntegrationCategory::AiModel,
-            status_fn: |_| IntegrationStatus::ComingSoon,
+            status_fn: |c| {
+                if c.default_provider.as_deref().is_some_and(|provider| {
+                    provider.eq_ignore_ascii_case("lmstudio")
+                        || provider.eq_ignore_ascii_case("lm-studio")
+                }) {
+                    IntegrationStatus::Active
+                } else {
+                    IntegrationStatus::Available
+                }
+            },
         },
         IntegrationEntry {
             name: "Venice",
@@ -872,6 +881,38 @@ mod tests {
                 "{name} should be ComingSoon"
             );
         }
+    }
+
+    #[test]
+    fn lm_studio_available_when_not_selected_as_default_provider() {
+        let config = Config::default();
+        let entries = all_integrations();
+        let lm_studio = entries.iter().find(|e| e.name == "LM Studio").unwrap();
+        assert!(matches!(
+            (lm_studio.status_fn)(&config),
+            IntegrationStatus::Available
+        ));
+    }
+
+    #[test]
+    fn lm_studio_active_for_lmstudio_default_provider_aliases() {
+        let entries = all_integrations();
+        let lm_studio = entries.iter().find(|e| e.name == "LM Studio").unwrap();
+
+        let mut config = Config {
+            default_provider: Some("lmstudio".to_string()),
+            ..Config::default()
+        };
+        assert!(matches!(
+            (lm_studio.status_fn)(&config),
+            IntegrationStatus::Active
+        ));
+
+        config.default_provider = Some("lm-studio".to_string());
+        assert!(matches!(
+            (lm_studio.status_fn)(&config),
+            IntegrationStatus::Active
+        ));
     }
 
     #[test]

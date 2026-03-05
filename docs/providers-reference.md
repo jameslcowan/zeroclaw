@@ -63,6 +63,22 @@ credential is not reused for fallback providers.
 | `osaurus` | — | Yes | `OSAURUS_API_KEY` (optional; defaults to `"osaurus"`) |
 | `nvidia` | `nvidia-nim`, `build.nvidia.com` | No | `NVIDIA_API_KEY` |
 
+### LM Studio Notes
+
+- Provider ID: `lmstudio` (alias: `lm-studio`)
+- Default local endpoint: `http://localhost:1234/v1`
+- Override endpoint with `api_url` for remote server mode:
+
+```toml
+default_provider = "lmstudio"
+api_url = "http://10.0.0.20:1234/v1"
+default_model = "qwen2.5-coder:7b"
+```
+
+- Authentication:
+  - Optional. If your LM Studio server enforces auth, set `api_key` (or `API_KEY`/`ZEROCLAW_API_KEY`).
+  - If no key is set, ZeroClaw uses an internal placeholder token for compatibility with OpenAI-style auth headers.
+
 ### Vercel AI Gateway Notes
 
 - Provider ID: `vercel` (alias: `vercel-ai`)
