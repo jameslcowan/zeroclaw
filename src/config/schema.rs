@@ -3561,6 +3561,14 @@ fn default_bridge_path() -> String {
     "/ws".into()
 }
 
+fn default_bridge_auth_token() -> String {
+    String::new()
+}
+
+fn default_bridge_max_connections() -> usize {
+    64
+}
+
 /// Bridge WebSocket channel configuration.
 ///
 /// This listener is local-only by default (`127.0.0.1`) for safety.
@@ -3575,6 +3583,25 @@ pub struct BridgeConfig {
     /// HTTP path for websocket upgrade requests.
     #[serde(default = "default_bridge_path")]
     pub path: String,
+    /// Shared bearer token required from bridge websocket clients.
+    ///
+    /// Empty default means bridge auth is not configured yet; listener startup
+    /// will fail fast until this is explicitly set.
+    #[serde(default = "default_bridge_auth_token")]
+    pub auth_token: String,
+    /// Allowlisted sender IDs that can authenticate over bridge.
+    ///
+    /// Empty list is deny-by-default.
+    #[serde(default)]
+    pub allowed_senders: Vec<String>,
+    /// Allow non-localhost binds.
+    ///
+    /// Defaults to `false`; public bind addresses require an explicit opt-in.
+    #[serde(default)]
+    pub allow_public_bind: bool,
+    /// Maximum concurrent websocket bridge connections.
+    #[serde(default = "default_bridge_max_connections")]
+    pub max_connections: usize,
 }
 
 impl Default for BridgeConfig {
@@ -3583,6 +3610,10 @@ impl Default for BridgeConfig {
             bind_host: default_bridge_bind_host(),
             bind_port: default_bridge_bind_port(),
             path: default_bridge_path(),
+            auth_token: default_bridge_auth_token(),
+            allowed_senders: Vec::new(),
+            allow_public_bind: false,
+            max_connections: default_bridge_max_connections(),
         }
     }
 }
@@ -5271,6 +5302,15 @@ fn decrypt_channel_secrets(
             "config.channels_config.webhook.secret",
         )?;
     }
+    if let Some(ref mut bridge) = channels.bridge {
+        if !bridge.auth_token.trim().is_empty() {
+            decrypt_secret(
+                store,
+                &mut bridge.auth_token,
+                "config.channels_config.bridge.auth_token",
+            )?;
+        }
+    }
     if let Some(ref mut matrix) = channels.matrix {
         decrypt_secret(
             store,
@@ -5521,6 +5561,15 @@ fn encrypt_channel_secrets(
             &mut webhook.secret,
             "config.channels_config.webhook.secret",
         )?;
+    }
+    if let Some(ref mut bridge) = channels.bridge {
+        if !bridge.auth_token.trim().is_empty() {
+            encrypt_secret(
+                store,
+                &mut bridge.auth_token,
+                "config.channels_config.bridge.auth_token",
+            )?;
+        }
     }
     if let Some(ref mut matrix) = channels.matrix {
         encrypt_secret(
@@ -8292,6 +8341,10 @@ allowed_users = ["@ops:matrix.org"]
         assert_eq!(parsed.bind_host, "127.0.0.1");
         assert_eq!(parsed.bind_port, 8765);
         assert_eq!(parsed.path, "/ws");
+        assert!(parsed.auth_token.is_empty());
+        assert!(parsed.allowed_senders.is_empty());
+        assert!(!parsed.allow_public_bind);
+        assert_eq!(parsed.max_connections, 64);
     }
 
     #[test]
@@ -8303,12 +8356,20 @@ cli = true
 bind_host = "127.0.0.1"
 bind_port = 9010
 path = "/bridge"
+auth_token = "test-token"
+allowed_senders = ["sender_a", "sender_b"]
+allow_public_bind = false
+max_connections = 16
 "#;
         let parsed: ChannelsConfig = toml::from_str(toml_str).unwrap();
         let bridge = parsed.bridge.expect("bridge should be present");
         assert_eq!(bridge.bind_host, "127.0.0.1");
         assert_eq!(bridge.bind_port, 9010);
         assert_eq!(bridge.path, "/bridge");
+        assert_eq!(bridge.auth_token, "test-token");
+        assert_eq!(bridge.allowed_senders, vec!["sender_a", "sender_b"]);
+        assert!(!bridge.allow_public_bind);
+        assert_eq!(bridge.max_connections, 16);
     }
 
     // ── Edge cases: serde(default) for allowed_users ─────────
