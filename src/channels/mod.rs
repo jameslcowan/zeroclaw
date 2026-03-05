@@ -1015,6 +1015,18 @@ fn build_runtime_tool_visibility_prompt(
         );
     }
 
+    prompt.push_str(
+        "- Do not claim tools are unavailable when they are listed above; call the appropriate tool directly.\n",
+    );
+    if specs
+        .iter()
+        .any(|spec| matches!(spec.name.as_str(), "file_write" | "file_edit"))
+    {
+        prompt.push_str(
+            "- File changes are supported in this turn (`file_write`/`file_edit`) when requested and policy permits.\n",
+        );
+    }
+
     if native_tools {
         prompt.push_str(
             "Tool calling for this turn uses native provider function-calling. \
@@ -6014,12 +6026,20 @@ BTC is currently around $65,000 based on latest tool output."#
         assert!(non_native.contains("Excluded by runtime policy: mock_price"));
         assert!(non_native.contains("`mock_echo`"));
         assert!(!non_native.contains("**mock_price**:"));
+        assert!(non_native.contains("Do not claim tools are unavailable"));
         assert!(non_native.contains("## Tool Use Protocol"));
 
         let native = build_runtime_tool_visibility_prompt(&tools, &excluded, true);
         assert!(native.contains("Runtime Tool Availability (Authoritative)"));
+        assert!(native.contains("Do not claim tools are unavailable"));
         assert!(native.contains("native provider function-calling"));
         assert!(!native.contains("## Tool Use Protocol"));
+    }
+
+    fn autonomy_with_mock_price_auto_approve() -> crate::config::AutonomyConfig {
+        let mut autonomy = crate::config::AutonomyConfig::default();
+        autonomy.auto_approve.push("mock_price".to_string());
+        autonomy
     }
 
     #[tokio::test]
@@ -6064,7 +6084,7 @@ BTC is currently around $65,000 based on latest tool output."#
             query_classification: crate::config::QueryClassificationConfig::default(),
             model_routes: Vec::new(),
             approval_manager: Arc::new(ApprovalManager::from_config(
-                &crate::config::AutonomyConfig::default(),
+                &autonomy_with_mock_price_auto_approve(),
             )),
         });
 
@@ -6139,7 +6159,7 @@ BTC is currently around $65,000 based on latest tool output."#
             query_classification: crate::config::QueryClassificationConfig::default(),
             model_routes: Vec::new(),
             approval_manager: Arc::new(ApprovalManager::from_config(
-                &crate::config::AutonomyConfig::default(),
+                &autonomy_with_mock_price_auto_approve(),
             )),
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
@@ -6203,7 +6223,7 @@ BTC is currently around $65,000 based on latest tool output."#
             query_classification: crate::config::QueryClassificationConfig::default(),
             model_routes: Vec::new(),
             approval_manager: Arc::new(ApprovalManager::from_config(
-                &crate::config::AutonomyConfig::default(),
+                &autonomy_with_mock_price_auto_approve(),
             )),
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
@@ -6279,7 +6299,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             non_cli_excluded_tools: Arc::new(Mutex::new(Vec::new())),
             approval_manager: Arc::new(ApprovalManager::from_config(
-                &crate::config::AutonomyConfig::default(),
+                &autonomy_with_mock_price_auto_approve(),
             )),
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
@@ -6356,7 +6376,7 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: false,
             non_cli_excluded_tools: Arc::new(Mutex::new(Vec::new())),
             approval_manager: Arc::new(ApprovalManager::from_config(
-                &crate::config::AutonomyConfig::default(),
+                &autonomy_with_mock_price_auto_approve(),
             )),
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
@@ -6429,7 +6449,7 @@ BTC is currently around $65,000 based on latest tool output."#
             query_classification: crate::config::QueryClassificationConfig::default(),
             model_routes: Vec::new(),
             approval_manager: Arc::new(ApprovalManager::from_config(
-                &crate::config::AutonomyConfig::default(),
+                &autonomy_with_mock_price_auto_approve(),
             )),
         });
 
@@ -6493,7 +6513,7 @@ BTC is currently around $65,000 based on latest tool output."#
             query_classification: crate::config::QueryClassificationConfig::default(),
             model_routes: Vec::new(),
             approval_manager: Arc::new(ApprovalManager::from_config(
-                &crate::config::AutonomyConfig::default(),
+                &autonomy_with_mock_price_auto_approve(),
             )),
         });
 
@@ -6566,7 +6586,7 @@ BTC is currently around $65,000 based on latest tool output."#
             query_classification: crate::config::QueryClassificationConfig::default(),
             model_routes: Vec::new(),
             approval_manager: Arc::new(ApprovalManager::from_config(
-                &crate::config::AutonomyConfig::default(),
+                &autonomy_with_mock_price_auto_approve(),
             )),
         });
 
@@ -7837,7 +7857,7 @@ BTC is currently around $65,000 based on latest tool output."#
             query_classification: crate::config::QueryClassificationConfig::default(),
             model_routes: Vec::new(),
             approval_manager: Arc::new(ApprovalManager::from_config(
-                &crate::config::AutonomyConfig::default(),
+                &autonomy_with_mock_price_auto_approve(),
             )),
         });
 
@@ -8239,6 +8259,8 @@ BTC is currently around $65,000 based on latest tool output."#
     async fn process_channel_message_respects_configured_max_tool_iterations_above_default() {
         let channel_impl = Arc::new(RecordingChannel::default());
         let channel: Arc<dyn Channel> = channel_impl.clone();
+        let mut autonomy_cfg = autonomy_with_mock_price_auto_approve();
+        autonomy_cfg.level = crate::security::AutonomyLevel::Full;
 
         let mut channels_by_name = HashMap::new();
         channels_by_name.insert(channel.name().to_string(), channel);
@@ -8266,16 +8288,14 @@ BTC is currently around $65,000 based on latest tool output."#
             reliability: Arc::new(crate::config::ReliabilityConfig::default()),
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
-            message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+            message_timeout_secs: 5,
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Mutex::new(Vec::new())),
             query_classification: crate::config::QueryClassificationConfig::default(),
             model_routes: Vec::new(),
-            approval_manager: Arc::new(ApprovalManager::from_config(
-                &crate::config::AutonomyConfig::default(),
-            )),
+            approval_manager: Arc::new(ApprovalManager::from_config(&autonomy_cfg)),
         });
 
         process_channel_message(
@@ -8304,6 +8324,8 @@ BTC is currently around $65,000 based on latest tool output."#
     async fn process_channel_message_reports_configured_max_tool_iterations_limit() {
         let channel_impl = Arc::new(RecordingChannel::default());
         let channel: Arc<dyn Channel> = channel_impl.clone();
+        let mut autonomy_cfg = autonomy_with_mock_price_auto_approve();
+        autonomy_cfg.level = crate::security::AutonomyLevel::Full;
 
         let mut channels_by_name = HashMap::new();
         channels_by_name.insert(channel.name().to_string(), channel);
@@ -8331,16 +8353,14 @@ BTC is currently around $65,000 based on latest tool output."#
             reliability: Arc::new(crate::config::ReliabilityConfig::default()),
             provider_runtime_options: providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
-            message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+            message_timeout_secs: 5,
             interrupt_on_new_message: false,
             multimodal: crate::config::MultimodalConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Mutex::new(Vec::new())),
             query_classification: crate::config::QueryClassificationConfig::default(),
             model_routes: Vec::new(),
-            approval_manager: Arc::new(ApprovalManager::from_config(
-                &crate::config::AutonomyConfig::default(),
-            )),
+            approval_manager: Arc::new(ApprovalManager::from_config(&autonomy_cfg)),
         });
 
         process_channel_message(

@@ -5526,6 +5526,22 @@ fn read_codex_openai_api_key() -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn normalize_top_level_table_aliases(raw_toml: &mut toml::Value) {
+    let Some(root) = raw_toml.as_table_mut() else {
+        return;
+    };
+
+    if root.contains_key("Gateway") {
+        if root.contains_key("gateway") {
+            let _ = root.remove("Gateway");
+            tracing::warn!("Legacy table [Gateway] ignored because [gateway] is already present.");
+        } else if let Some(value) = root.remove("Gateway") {
+            root.insert("gateway".to_string(), value);
+            tracing::warn!("Legacy table [Gateway] mapped to [gateway].");
+        }
+    }
+}
+
 impl Config {
     pub async fn load_or_init() -> Result<Self> {
         let (default_zeroclaw_dir, default_workspace_dir) = default_config_and_workspace_dirs()?;
@@ -5563,12 +5579,18 @@ impl Config {
             let contents = fs::read_to_string(&config_path)
                 .await
                 .context("Failed to read config file")?;
+            let mut raw_toml: toml::Value =
+                toml::from_str(&contents).context("Failed to parse config file")?;
+            normalize_top_level_table_aliases(&mut raw_toml);
+            let normalized_contents =
+                toml::to_string(&raw_toml).context("Failed to normalize config file")?;
 
             // Track ignored/unknown config keys to warn users about silent misconfigurations
             // (e.g., using [providers.ollama] which doesn't exist instead of top-level api_url)
             let mut ignored_paths: Vec<String> = Vec::new();
             let mut config: Config = serde_ignored::deserialize(
-                toml::de::Deserializer::parse(&contents).context("Failed to parse config file")?,
+                toml::de::Deserializer::parse(&normalized_contents)
+                    .context("Failed to parse config file")?,
                 |path| {
                     ignored_paths.push(path.to_string());
                 },
@@ -8432,6 +8454,25 @@ default_temperature = 0.7
         assert!(
             !parsed.gateway.allow_public_bind,
             "Missing [gateway] must default to allow_public_bind=false"
+        );
+    }
+
+    #[test]
+    async fn checklist_gateway_backward_compat_accepts_legacy_gateway_table_alias() {
+        let mut raw: toml::Value = toml::from_str(
+            r#"
+default_temperature = 0.7
+[Gateway]
+require_pairing = false
+"#,
+        )
+        .unwrap();
+
+        normalize_top_level_table_aliases(&mut raw);
+        let parsed: Config = raw.try_into().unwrap();
+        assert!(
+            !parsed.gateway.require_pairing,
+            "Legacy [Gateway] alias should map to [gateway]"
         );
     }
 
