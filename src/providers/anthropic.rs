@@ -1287,7 +1287,15 @@ mod tests {
             }),
         );
 
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        if let Err(err) = std::net::TcpListener::bind("127.0.0.1:0") {
+            let reason = format!("loopback bind unavailable: {err}");
+            eprintln!("Skipping loopback-dependent Anthropic test: {reason}");
+            return;
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("loopback bind should be available after capability check");
         let addr = listener.local_addr().unwrap();
         let server_handle = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();

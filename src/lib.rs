@@ -69,6 +69,7 @@ pub mod runtime;
 pub(crate) mod security;
 pub(crate) mod service;
 pub(crate) mod skills;
+pub mod test_capabilities;
 pub mod tools;
 pub(crate) mod tunnel;
 pub mod update;
