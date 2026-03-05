@@ -232,35 +232,60 @@ static SENSITIVE_KV_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(token|api[_-]?key|password|secret|user[_-]?key|bearer|credential)["']?\s*[:=]\s*(?:"([^"]{8,})"|'([^']{8,})'|([a-zA-Z0-9_\-\.]{8,}))"#).unwrap()
 });
 
-/// Detect "I'll do X" style deferred-action replies that often indicate a missing
-/// follow-up tool call in agentic flows.
+/// Detect responses that *claim work is already done* without emitting tool calls.
+///
+/// Planning language like "I'll check" or "let me inspect" is intentionally not
+/// matched, because those replies can be valid intermediate reasoning.
 static DEFERRED_ACTION_WITHOUT_TOOL_CALL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?ix)
         \b(
-            i(?:'ll|\s+will)|
-            i\s+am\s+going\s+to|
-            let\s+me|
-            let(?:'s|\s+us)|
-            we(?:'ll|\s+will)
+            i(?:\s+have|'ve)\s+(?:already\s+|just\s+)?|
+            we(?:\s+have|'ve)\s+(?:already\s+|just\s+)?|
+            (?:it|that|this)\s+is\s+(?:now\s+)?|
+            (?:it|that|this)\s+has\s+been\s+
         )\b
         [^.!?\n]{0,160}
         \b(
-            check|look|search|browse|open|read|write|run|execute|call|
-            inspect|analy(?:s|z)e|verify|list|fetch|try|see|continue
+            done|completed|finished|created|updated|edited|fixed|patched|
+            checked|verified|listed|fetched|retrieved|opened|ran|executed|
+            analyzed|analysed|resolved|handled|implemented
         )\b",
     )
     .unwrap()
 });
 
-/// Detect common CJK deferred-action phrases (e.g., Chinese "让我…查看")
-/// that imply a follow-up tool call should occur.
-static CJK_DEFERRED_ACTION_CUE_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(让我|我来|我会|我们来|我们会|我先|先让我|马上)").unwrap());
+/// Detect first-person CJK completion claims (e.g., "我已经处理了").
+static CJK_DEFERRED_ACTION_SUBJECT_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(我|我们)").unwrap());
 
-/// Action verbs commonly used when promising to perform tool-backed work in CJK text.
+/// Detect common CJK completion cues (e.g., "已经处理", "完成了").
+static CJK_DEFERRED_ACTION_CUE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(已经|已将|完成了|处理了|搞定了|修好了|更新了)").unwrap());
+
+/// Action verbs commonly used when claiming tool-backed work in CJK text.
 static CJK_DEFERRED_ACTION_VERB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(查看|检查|搜索|查找|浏览|打开|读取|写入|运行|执行|调用|分析|验证|列出|获取|尝试|试试|继续|处理|修复|看看|看一看|看一下)").unwrap()
+    Regex::new(r"(完成|处理|修复|修改|更新|创建|写入|执行|运行|检查|验证|分析|获取|读取|调用|整理)")
+        .unwrap()
+});
+
+/// Detect replies that incorrectly claim required tools are unavailable.
+static TOOL_UNAVAILABLE_CLAIM_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?ix)
+        \b(
+            i\s+(?:do\s+not|don't)\s+have\s+access|
+            i\s+(?:cannot|can't)\s+(?:access|use|perform|create|edit|write)|
+            i\s+am\s+unable\s+to|
+            no\s+(?:tool|tools|function|functions)\s+(?:available|access)
+        )\b
+        [^.!?\n]{0,220}
+        \b(
+            tool|tools|function|functions|file|file_write|file_edit|
+            create|write|edit|delete
+        )\b",
+    )
+    .unwrap()
 });
 
 /// Fast check for CJK scripts (Han/Hiragana/Katakana/Hangul) so we only run
@@ -348,6 +373,7 @@ const AUTO_CRON_DELIVERY_CHANNELS: &[&str] = &[
 const NON_CLI_APPROVAL_WAIT_TIMEOUT_SECS: u64 = 300;
 const NON_CLI_APPROVAL_POLL_INTERVAL_MS: u64 = 250;
 const MISSING_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: your last reply indicated you were about to take an action, but no valid tool call was emitted. If a tool is needed, emit it now using the required <tool_call>...</tool_call> format. If no tool is needed, provide the complete final answer now and do not defer action.";
+const TOOL_UNAVAILABLE_RETRY_PROMPT_PREFIX: &str = "Internal correction: your prior reply claimed required tools were unavailable. Use only the runtime-allowed tools listed below. If file changes are requested and `file_write`/`file_edit` are listed, call them directly.";
 
 #[derive(Debug, Clone)]
 pub(crate) struct NonCliApprovalPrompt {
@@ -369,6 +395,7 @@ tokio::task_local! {
     static SAFETY_HEARTBEAT_CONFIG: Option<SafetyHeartbeatConfig>;
     static TOOL_LOOP_PROGRESS_MODE: ProgressMode;
     static TOOL_LOOP_COST_ENFORCEMENT_CONTEXT: Option<CostEnforcementContext>;
+    static TOOL_LOOP_DEFERRED_ACTION_POLICY: crate::config::DeferredActionPolicy;
 }
 
 /// Configuration for periodic safety-constraint re-injection (heartbeat).
@@ -428,6 +455,16 @@ where
     TOOL_LOOP_COST_ENFORCEMENT_CONTEXT
         .scope(context, future)
         .await
+}
+
+pub(crate) async fn scope_deferred_action_policy<F>(
+    policy: crate::config::DeferredActionPolicy,
+    future: F,
+) -> F::Output
+where
+    F: Future,
+{
+    TOOL_LOOP_DEFERRED_ACTION_POLICY.scope(policy, future).await
 }
 
 fn should_inject_safety_heartbeat(counter: usize, interval: usize) -> bool {
@@ -622,8 +659,34 @@ fn looks_like_deferred_action_without_tool_call(text: &str) -> bool {
     }
 
     CJK_SCRIPT_REGEX.is_match(trimmed)
+        && CJK_DEFERRED_ACTION_SUBJECT_REGEX.is_match(trimmed)
         && CJK_DEFERRED_ACTION_CUE_REGEX.is_match(trimmed)
         && CJK_DEFERRED_ACTION_VERB_REGEX.is_match(trimmed)
+}
+
+fn looks_like_tool_unavailability_claim(text: &str, tool_specs: &[crate::tools::ToolSpec]) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || !TOOL_UNAVAILABLE_CLAIM_REGEX.is_match(trimmed) {
+        return false;
+    }
+
+    tool_specs
+        .iter()
+        .any(|spec| matches!(spec.name.as_str(), "file_write" | "file_edit"))
+}
+
+fn build_tool_unavailable_retry_prompt(tool_specs: &[crate::tools::ToolSpec]) -> String {
+    const MAX_TOOLS_IN_PROMPT: usize = 24;
+    let tool_list = tool_specs
+        .iter()
+        .map(|spec| spec.name.as_str())
+        .take(MAX_TOOLS_IN_PROMPT)
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "{TOOL_UNAVAILABLE_RETRY_PROMPT_PREFIX}\nRuntime tools: {tool_list}\nEmit the correct tool call now if tool use is required. Otherwise provide the final answer without claiming missing tools."
+    )
 }
 
 fn merge_continuation_text(existing: &str, next: &str) -> String {
@@ -1215,6 +1278,9 @@ pub async fn run_tool_call_loop(
     let progress_mode = TOOL_LOOP_PROGRESS_MODE
         .try_with(|mode| *mode)
         .unwrap_or(ProgressMode::Verbose);
+    let deferred_action_policy = TOOL_LOOP_DEFERRED_ACTION_POLICY
+        .try_with(|policy| *policy)
+        .unwrap_or_default();
     let cost_enforcement_context = TOOL_LOOP_COST_ENFORCEMENT_CONTEXT
         .try_with(Clone::clone)
         .ok()
@@ -1897,17 +1963,27 @@ pub async fn run_tool_call_loop(
         }
 
         if tool_calls.is_empty() {
+            let deferred_action_signal =
+                looks_like_deferred_action_without_tool_call(&display_text);
+            let tool_unavailable_signal =
+                looks_like_tool_unavailability_claim(&display_text, &tool_specs);
             let missing_tool_call_signal =
-                parse_issue_detected || looks_like_deferred_action_without_tool_call(&display_text);
+                parse_issue_detected || deferred_action_signal || tool_unavailable_signal;
             let missing_tool_call_followthrough = !missing_tool_call_retry_used
                 && iteration + 1 < max_iterations
                 && !tool_specs.is_empty()
                 && missing_tool_call_signal;
             if missing_tool_call_followthrough {
                 missing_tool_call_retry_used = true;
-                missing_tool_call_retry_prompt = Some(MISSING_TOOL_CALL_RETRY_PROMPT.to_string());
+                missing_tool_call_retry_prompt = Some(if tool_unavailable_signal {
+                    build_tool_unavailable_retry_prompt(&tool_specs)
+                } else {
+                    MISSING_TOOL_CALL_RETRY_PROMPT.to_string()
+                });
                 let retry_reason = if parse_issue_detected {
                     "parse_issue_detected"
+                } else if tool_unavailable_signal {
+                    "tool_unavailable_claim_detected"
                 } else {
                     "deferred_action_text_detected"
                 };
@@ -1954,9 +2030,30 @@ pub async fn run_tool_call_loop(
                         "response_excerpt": truncate_with_ellipsis(&redact_trace_text(&display_text), 600),
                     }),
                 );
-                anyhow::bail!(
-                    "Model deferred action without emitting a tool call after retry; refusing to return unverified completion."
-                );
+
+                if tool_unavailable_signal {
+                    tracing::warn!(
+                        "Model still claims missing tools after corrective retry; returning text response."
+                    );
+                } else {
+                    match deferred_action_policy {
+                        crate::config::DeferredActionPolicy::Reject => {
+                            anyhow::bail!(
+                                "Model deferred action without emitting a tool call after retry; refusing to return unverified completion."
+                            );
+                        }
+                        crate::config::DeferredActionPolicy::Warn => {
+                            tracing::warn!(
+                                "Deferred-action followthrough check failed after retry; returning text due [agent].deferred_action_policy=\"warn\"."
+                            );
+                        }
+                        crate::config::DeferredActionPolicy::Allow => {
+                            tracing::debug!(
+                                "Deferred-action followthrough check failed after retry; returning text due [agent].deferred_action_policy=\"allow\"."
+                            );
+                        }
+                    }
+                }
             }
 
             runtime_trace::record_event(
@@ -2606,6 +2703,23 @@ pub(crate) fn build_shell_policy_instructions(autonomy: &crate::config::Autonomy
     instructions
 }
 
+fn build_runtime_tool_availability_notice(tools_registry: &[Box<dyn Tool>]) -> String {
+    const MAX_LISTED_TOOLS: usize = 40;
+    let names = tools_registry
+        .iter()
+        .map(|tool| tool.name())
+        .take(MAX_LISTED_TOOLS)
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "\n## Runtime Tool Availability (Authoritative)\n\n\
+         Use only these runtime-available tools for this turn.\n\
+         Tools: {names}\n\
+         Do not claim tools are unavailable when they are listed here.\n"
+    )
+}
+
 // ── CLI Entrypoint ───────────────────────────────────────────────────────
 // Wires up all subsystems (observer, runtime, security, memory, tools,
 // provider, hardware RAG, peripherals) and enters either single-shot or
@@ -2907,6 +3021,7 @@ pub async fn run(
         system_prompt.push_str(&build_tool_instructions(&tools_registry));
     }
     system_prompt.push_str(&build_shell_policy_instructions(&config.autonomy));
+    system_prompt.push_str(&build_runtime_tool_availability_notice(&tools_registry));
 
     let configured_hooks = crate::hooks::create_runner_from_config(&config.hooks);
     let effective_hooks = hooks.or(configured_hooks.as_deref());
@@ -2971,29 +3086,32 @@ pub async fn run(
         };
         let response = scope_cost_enforcement_context(
             cost_enforcement_context.clone(),
-            SAFETY_HEARTBEAT_CONFIG.scope(
-                hb_cfg,
-                LOOP_DETECTION_CONFIG.scope(
-                    ld_cfg,
-                    TOOL_LOOP_CANARY_TOKENS_ENABLED.scope(
-                        config.security.canary_tokens,
-                        run_tool_call_loop(
-                            provider.as_ref(),
-                            &mut history,
-                            &tools_registry,
-                            observer.as_ref(),
-                            provider_name,
-                            &model_name,
-                            temperature,
-                            false,
-                            approval_manager.as_ref(),
-                            channel_name,
-                            &config.multimodal,
-                            config.agent.max_tool_iterations,
-                            None,
-                            None,
-                            effective_hooks,
-                            &[],
+            scope_deferred_action_policy(
+                config.agent.deferred_action_policy,
+                SAFETY_HEARTBEAT_CONFIG.scope(
+                    hb_cfg,
+                    LOOP_DETECTION_CONFIG.scope(
+                        ld_cfg,
+                        TOOL_LOOP_CANARY_TOKENS_ENABLED.scope(
+                            config.security.canary_tokens,
+                            run_tool_call_loop(
+                                provider.as_ref(),
+                                &mut history,
+                                &tools_registry,
+                                observer.as_ref(),
+                                provider_name,
+                                &model_name,
+                                temperature,
+                                false,
+                                approval_manager.as_ref(),
+                                channel_name,
+                                &config.multimodal,
+                                config.agent.max_tool_iterations,
+                                None,
+                                None,
+                                effective_hooks,
+                                &[],
+                            ),
                         ),
                     ),
                 ),
@@ -3200,29 +3318,32 @@ pub async fn run(
             };
             let response = match scope_cost_enforcement_context(
                 cost_enforcement_context.clone(),
-                SAFETY_HEARTBEAT_CONFIG.scope(
-                    hb_cfg,
-                    LOOP_DETECTION_CONFIG.scope(
-                        ld_cfg,
-                        TOOL_LOOP_CANARY_TOKENS_ENABLED.scope(
-                            config.security.canary_tokens,
-                            run_tool_call_loop(
-                                provider.as_ref(),
-                                &mut history,
-                                &tools_registry,
-                                observer.as_ref(),
-                                provider_name,
-                                &model_name,
-                                temperature,
-                                false,
-                                approval_manager.as_ref(),
-                                channel_name,
-                                &config.multimodal,
-                                config.agent.max_tool_iterations,
-                                None,
-                                None,
-                                effective_hooks,
-                                &[],
+                scope_deferred_action_policy(
+                    config.agent.deferred_action_policy,
+                    SAFETY_HEARTBEAT_CONFIG.scope(
+                        hb_cfg,
+                        LOOP_DETECTION_CONFIG.scope(
+                            ld_cfg,
+                            TOOL_LOOP_CANARY_TOKENS_ENABLED.scope(
+                                config.security.canary_tokens,
+                                run_tool_call_loop(
+                                    provider.as_ref(),
+                                    &mut history,
+                                    &tools_registry,
+                                    observer.as_ref(),
+                                    provider_name,
+                                    &model_name,
+                                    temperature,
+                                    false,
+                                    approval_manager.as_ref(),
+                                    channel_name,
+                                    &config.multimodal,
+                                    config.agent.max_tool_iterations,
+                                    None,
+                                    None,
+                                    effective_hooks,
+                                    &[],
+                                ),
                             ),
                         ),
                     ),
@@ -3532,6 +3653,7 @@ pub async fn process_message_with_session(
         system_prompt.push_str(&build_tool_instructions(&tools_registry));
     }
     system_prompt.push_str(&build_shell_policy_instructions(&config.autonomy));
+    system_prompt.push_str(&build_runtime_tool_availability_notice(&tools_registry));
 
     let mem_context = build_context(
         mem.as_ref(),
@@ -3570,19 +3692,22 @@ pub async fn process_message_with_session(
     };
     let response = scope_cost_enforcement_context(
         cost_enforcement_context,
-        SAFETY_HEARTBEAT_CONFIG.scope(
-            hb_cfg,
-            agent_turn(
-                provider.as_ref(),
-                &mut history,
-                &tools_registry,
-                observer.as_ref(),
-                provider_name,
-                &model_name,
-                config.default_temperature,
-                true,
-                &config.multimodal,
-                config.agent.max_tool_iterations,
+        scope_deferred_action_policy(
+            config.agent.deferred_action_policy,
+            SAFETY_HEARTBEAT_CONFIG.scope(
+                hb_cfg,
+                agent_turn(
+                    provider.as_ref(),
+                    &mut history,
+                    &tools_registry,
+                    observer.as_ref(),
+                    provider_name,
+                    &model_name,
+                    config.default_temperature,
+                    true,
+                    &config.multimodal,
+                    config.agent.max_tool_iterations,
+                ),
             ),
         ),
     )
@@ -5186,9 +5311,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_tool_call_loop_retries_once_when_response_defers_action_without_tool_call() {
+    async fn run_tool_call_loop_retries_once_when_response_claims_completed_action_without_tool_call(
+    ) {
         let provider = ScriptedProvider::from_text_responses(vec![
-            "I'll check that right away.",
+            "I have already checked that for you.",
             r#"<tool_call>
 {"name":"count_tool","arguments":{"value":"retry"}}
 </tool_call>"#,
@@ -5226,7 +5352,7 @@ mod tests {
             &[],
         )
         .await
-        .expect("loop should recover after one deferred-action reply");
+        .expect("loop should recover after one unverified-completion reply");
 
         assert_eq!(result, "done after tool");
         assert_eq!(
@@ -5237,10 +5363,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_tool_call_loop_errors_when_deferred_action_repeats_without_tool_call() {
+    async fn run_tool_call_loop_errors_when_unverified_completion_repeats_without_tool_call() {
         let provider = ScriptedProvider::from_text_responses(vec![
-            "I'll check that right away.",
-            "Let me inspect that in detail now.",
+            "I've already checked that.",
+            "I have completed that verification.",
         ]);
 
         let invocations = Arc::new(AtomicUsize::new(0));
@@ -5274,7 +5400,7 @@ mod tests {
             &[],
         )
         .await
-        .expect_err("second deferred response without tool call should hard-fail");
+        .expect_err("second unverified completion without tool call should hard-fail");
 
         let err_text = err.to_string();
         assert!(
@@ -5286,6 +5412,99 @@ mod tests {
             0,
             "tool should not execute when model never emits a tool call"
         );
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_warn_policy_returns_text_after_repeated_unverified_completion() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            "I've already checked that.",
+            "I have completed that verification.",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(CountingTool::new(
+            "count_tool",
+            Arc::clone(&invocations),
+        ))];
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("please check the workspace"),
+        ];
+        let observer = NoopObserver;
+
+        let result = scope_deferred_action_policy(
+            crate::config::DeferredActionPolicy::Warn,
+            run_tool_call_loop(
+                &provider,
+                &mut history,
+                &tools_registry,
+                &observer,
+                "mock-provider",
+                "mock-model",
+                0.0,
+                true,
+                None,
+                "cli",
+                &crate::config::MultimodalConfig::default(),
+                5,
+                None,
+                None,
+                None,
+                &[],
+            ),
+        )
+        .await
+        .expect("warn policy should return model text instead of failing");
+
+        assert_eq!(result, "I have completed that verification.");
+        assert_eq!(invocations.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_retries_when_model_claims_missing_file_tools() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            "I don't have access to a file creation tool in my current functions.",
+            r#"<tool_call>
+{"name":"file_write","arguments":{"value":"retry"}}
+</tool_call>"#,
+            "done after file tool",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(CountingTool::new(
+            "file_write",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("create a test file"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("loop should retry once when model wrongly claims file tools are unavailable");
+
+        assert_eq!(result, "done after file tool");
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -6718,18 +6937,21 @@ Done."#;
     }
 
     #[test]
-    fn looks_like_deferred_action_without_tool_call_detects_action_promises() {
+    fn looks_like_deferred_action_without_tool_call_detects_unverified_completion_claims() {
         assert!(looks_like_deferred_action_without_tool_call(
-            "Webpage opened, let's see what's new here."
+            "I have already checked the repository and completed the update."
         ));
         assert!(looks_like_deferred_action_without_tool_call(
-            "It seems absolute paths are blocked. Let me try using a relative path."
+            "We've finished running the migration and applied the fix."
         ));
         assert!(looks_like_deferred_action_without_tool_call(
-            "看起来绝对路径不可用，让我尝试使用当前目录的相对路径。"
+            "我已经完成了检查并修复了问题。"
         ));
-        assert!(looks_like_deferred_action_without_tool_call(
-            "页面已打开，让我获取快照查看详细信息。"
+        assert!(!looks_like_deferred_action_without_tool_call(
+            "I'll check that right away."
+        ));
+        assert!(!looks_like_deferred_action_without_tool_call(
+            "Let me inspect that in detail now."
         ));
     }
 
@@ -6740,6 +6962,31 @@ Done."#;
         ));
         assert!(!looks_like_deferred_action_without_tool_call(
             "最新结果已经在上面整理完成。"
+        ));
+    }
+
+    #[test]
+    fn looks_like_tool_unavailability_claim_detects_false_missing_tool_replies() {
+        let tools = vec![
+            crate::tools::ToolSpec {
+                name: "file_write".to_string(),
+                description: "Write file".to_string(),
+                parameters: serde_json::json!({"type":"object"}),
+            },
+            crate::tools::ToolSpec {
+                name: "file_edit".to_string(),
+                description: "Edit file".to_string(),
+                parameters: serde_json::json!({"type":"object"}),
+            },
+        ];
+
+        assert!(looks_like_tool_unavailability_claim(
+            "I don't have access to a file creation tool in my current set of available functions.",
+            &tools
+        ));
+        assert!(!looks_like_tool_unavailability_claim(
+            "I can create that file now.",
+            &tools
         ));
     }
 

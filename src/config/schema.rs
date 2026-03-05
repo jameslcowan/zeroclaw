@@ -1083,6 +1083,14 @@ pub struct AgentConfig {
     /// Set to `0` to disable. Default: `3`.
     #[serde(default = "default_loop_detection_failure_streak")]
     pub loop_detection_failure_streak: usize,
+    /// Policy for handling responses that appear to claim tool-backed work
+    /// without emitting a tool call after one corrective retry.
+    ///
+    /// - `reject` (default): fail the turn with an explicit error.
+    /// - `warn`: return the model text while recording a warning trace event.
+    /// - `allow`: return the model text without warning-level rejection.
+    #[serde(default)]
+    pub deferred_action_policy: DeferredActionPolicy,
     /// Safety heartbeat injection interval inside `run_tool_call_loop`.
     /// Injects a security-constraint reminder every N tool iterations.
     /// Set to `0` to disable. Default: `5`.
@@ -1204,10 +1212,24 @@ impl Default for AgentConfig {
             loop_detection_no_progress_threshold: default_loop_detection_no_progress_threshold(),
             loop_detection_ping_pong_cycles: default_loop_detection_ping_pong_cycles(),
             loop_detection_failure_streak: default_loop_detection_failure_streak(),
+            deferred_action_policy: DeferredActionPolicy::default(),
             safety_heartbeat_interval: default_safety_heartbeat_interval(),
             safety_heartbeat_turn_interval: default_safety_heartbeat_turn_interval(),
         }
     }
+}
+
+/// How the agent should handle repeated text-only deferred-action replies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DeferredActionPolicy {
+    /// Reject repeated deferred-action text after one corrective retry.
+    #[default]
+    Reject,
+    /// Return text but record a warning trace event.
+    Warn,
+    /// Return text without warning-level enforcement.
+    Allow,
 }
 
 impl Default for AgentSessionConfig {
@@ -7571,6 +7593,22 @@ fn apply_feishu_legacy_compat(
     }
 }
 
+fn normalize_top_level_table_aliases(raw_toml: &mut toml::Value) {
+    let Some(root) = raw_toml.as_table_mut() else {
+        return;
+    };
+
+    if root.contains_key("Gateway") {
+        if root.contains_key("gateway") {
+            let _ = root.remove("Gateway");
+            tracing::warn!("Legacy table [Gateway] ignored because [gateway] is already present.");
+        } else if let Some(value) = root.remove("Gateway") {
+            root.insert("gateway".to_string(), value);
+            tracing::warn!("Legacy table [Gateway] mapped to [gateway].");
+        }
+    }
+}
+
 impl Config {
     pub async fn load_or_init() -> Result<Self> {
         let (default_zeroclaw_dir, default_workspace_dir) = default_config_and_workspace_dirs()?;
@@ -7611,13 +7649,15 @@ impl Config {
 
             // Parse raw TOML first so legacy compatibility rewrites can be applied after
             // deserialization.
-            let raw_toml: toml::Value =
+            let mut raw_toml: toml::Value =
                 toml::from_str(&contents).context("Failed to parse config file")?;
+            normalize_top_level_table_aliases(&mut raw_toml);
             let legacy_feishu_mention_only = extract_legacy_feishu_mention_only(&raw_toml);
             let legacy_feishu_mention_only_present = has_legacy_feishu_mention_only(&raw_toml);
             let legacy_feishu_use_feishu_present = has_legacy_feishu_use_feishu(&raw_toml);
-            let mut config: Config =
-                toml::from_str(&contents).context("Failed to deserialize config file")?;
+            let mut config: Config = raw_toml
+                .try_into()
+                .context("Failed to deserialize config file")?;
 
             apply_feishu_legacy_compat(
                 &mut config,
@@ -10690,6 +10730,7 @@ reasoning_level = "high"
         assert_eq!(cfg.tool_dispatcher, "auto");
         assert!(cfg.allowed_tools.is_empty());
         assert!(cfg.denied_tools.is_empty());
+        assert_eq!(cfg.deferred_action_policy, DeferredActionPolicy::Reject);
     }
 
     #[test]
@@ -10702,6 +10743,7 @@ max_tool_iterations = 20
 max_history_messages = 80
 parallel_tools = true
 tool_dispatcher = "xml"
+deferred_action_policy = "warn"
 allowed_tools = ["delegate", "task_plan"]
 denied_tools = ["shell"]
 "#;
@@ -10711,6 +10753,10 @@ denied_tools = ["shell"]
         assert_eq!(parsed.agent.max_history_messages, 80);
         assert!(parsed.agent.parallel_tools);
         assert_eq!(parsed.agent.tool_dispatcher, "xml");
+        assert_eq!(
+            parsed.agent.deferred_action_policy,
+            DeferredActionPolicy::Warn
+        );
         assert_eq!(
             parsed.agent.allowed_tools,
             vec!["delegate".to_string(), "task_plan".to_string()]
@@ -11886,6 +11932,25 @@ default_temperature = 0.7
         assert!(
             !parsed.gateway.allow_public_bind,
             "Missing [gateway] must default to allow_public_bind=false"
+        );
+    }
+
+    #[test]
+    async fn checklist_gateway_backward_compat_accepts_legacy_gateway_table_alias() {
+        let mut raw: toml::Value = toml::from_str(
+            r#"
+default_temperature = 0.7
+[Gateway]
+require_pairing = false
+"#,
+        )
+        .unwrap();
+
+        normalize_top_level_table_aliases(&mut raw);
+        let parsed: Config = raw.try_into().unwrap();
+        assert!(
+            !parsed.gateway.require_pairing,
+            "Legacy [Gateway] alias should map to [gateway]"
         );
     }
 

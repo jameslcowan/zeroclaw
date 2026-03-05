@@ -247,6 +247,7 @@ struct ChannelRuntimeDefaults {
     default_provider: String,
     model: String,
     temperature: f64,
+    deferred_action_policy: crate::config::DeferredActionPolicy,
     api_key: Option<String>,
     api_url: Option<String>,
     reliability: crate::config::ReliabilityConfig,
@@ -1090,6 +1091,7 @@ fn runtime_defaults_from_config(config: &Config) -> ChannelRuntimeDefaults {
         default_provider: resolved_default_provider(config),
         model: resolved_default_model(config),
         temperature: config.default_temperature,
+        deferred_action_policy: config.agent.deferred_action_policy,
         api_key: config.api_key.clone(),
         api_url: config.api_url.clone(),
         reliability: config.reliability.clone(),
@@ -1146,6 +1148,7 @@ fn runtime_defaults_snapshot(ctx: &ChannelRuntimeContext) -> ChannelRuntimeDefau
         default_provider: ctx.default_provider.as_str().to_string(),
         model: ctx.model.as_str().to_string(),
         temperature: ctx.temperature,
+        deferred_action_policy: crate::config::DeferredActionPolicy::default(),
         api_key: ctx.api_key.clone(),
         api_url: ctx.api_url.clone(),
         reliability: (*ctx.reliability).clone(),
@@ -1257,6 +1260,18 @@ fn build_runtime_tool_visibility_prompt(
             prompt,
             "- Excluded by runtime policy: {}\n",
             excluded_sorted.join(", ")
+        );
+    }
+
+    prompt.push_str(
+        "- Do not claim tools are unavailable when they are listed above; call the appropriate tool directly.\n",
+    );
+    if specs
+        .iter()
+        .any(|spec| matches!(spec.name.as_str(), "file_write" | "file_edit"))
+    {
+        prompt.push_str(
+            "- File changes are supported in this turn (`file_write`/`file_edit`) when requested and policy permits.\n",
         );
     }
 
@@ -3844,27 +3859,30 @@ or tune thresholds in config.",
             Duration::from_secs(timeout_budget_secs),
             crate::agent::loop_::scope_cost_enforcement_context(
                 cost_enforcement_context,
-                run_tool_call_loop_with_non_cli_approval_context(
-                    active_provider.as_ref(),
-                    &mut history,
-                    ctx.tools_registry.as_ref(),
-                    ctx.observer.as_ref(),
-                    route.provider.as_str(),
-                    route.model.as_str(),
-                    runtime_defaults.temperature,
-                    true,
-                    Some(ctx.approval_manager.as_ref()),
-                    msg.channel.as_str(),
-                    non_cli_approval_context,
-                    &runtime_defaults.multimodal,
-                    runtime_defaults.max_tool_iterations,
-                    Some(cancellation_token.clone()),
-                    delta_tx,
-                    ctx.hooks.as_deref(),
-                    &excluded_tools_snapshot,
-                    progress_mode,
-                    ctx.safety_heartbeat.clone(),
-                    runtime_canary_tokens_snapshot(ctx.as_ref()),
+                crate::agent::loop_::scope_deferred_action_policy(
+                    runtime_defaults.deferred_action_policy,
+                    run_tool_call_loop_with_non_cli_approval_context(
+                        active_provider.as_ref(),
+                        &mut history,
+                        ctx.tools_registry.as_ref(),
+                        ctx.observer.as_ref(),
+                        route.provider.as_str(),
+                        route.model.as_str(),
+                        runtime_defaults.temperature,
+                        true,
+                        Some(ctx.approval_manager.as_ref()),
+                        msg.channel.as_str(),
+                        non_cli_approval_context,
+                        &runtime_defaults.multimodal,
+                        runtime_defaults.max_tool_iterations,
+                        Some(cancellation_token.clone()),
+                        delta_tx,
+                        ctx.hooks.as_deref(),
+                        &excluded_tools_snapshot,
+                        progress_mode,
+                        ctx.safety_heartbeat.clone(),
+                        runtime_canary_tokens_snapshot(ctx.as_ref()),
+                    ),
                 ),
             ),
         ) => LlmExecutionResult::Completed(result),
@@ -9608,6 +9626,7 @@ BTC is currently around $65,000 based on latest tool output."#
                         default_provider: "test-provider".to_string(),
                         model: "hot-reloaded-model".to_string(),
                         temperature: 0.5,
+                        deferred_action_policy: crate::config::DeferredActionPolicy::default(),
                         api_key: None,
                         api_url: None,
                         reliability: crate::config::ReliabilityConfig::default(),
