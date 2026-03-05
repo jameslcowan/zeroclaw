@@ -23,6 +23,18 @@ struct MigrationStats {
     renamed_conflicts: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceWorkspaceKind {
+    Explicit,
+    Default,
+}
+
+#[derive(Debug, Clone)]
+struct SourceWorkspace {
+    path: PathBuf,
+    kind: SourceWorkspaceKind,
+}
+
 pub async fn handle_command(command: crate::MigrateCommands, config: &Config) -> Result<()> {
     match command {
         crate::MigrateCommands::Openclaw { source, dry_run } => {
@@ -36,39 +48,35 @@ async fn migrate_openclaw_memory(
     source_workspace: Option<PathBuf>,
     dry_run: bool,
 ) -> Result<()> {
-    let source_workspace = resolve_openclaw_workspace(source_workspace)?;
-    if !source_workspace.exists() {
-        bail!(
-            "OpenClaw workspace not found at {}. Pass --source <path> if needed.",
-            source_workspace.display()
-        );
+    let source_workspace = resolve_openclaw_workspace(source_workspace);
+    if !source_workspace.path.exists() {
+        return handle_missing_source_workspace(config, &source_workspace, dry_run);
     }
 
-    if paths_equal(&source_workspace, &config.workspace_dir) {
+    if paths_equal(&source_workspace.path, &config.workspace_dir) {
         bail!("Source workspace matches current ZeroClaw workspace; refusing self-migration");
     }
 
     let mut stats = MigrationStats::default();
-    let entries = collect_source_entries(&source_workspace, &mut stats)?;
+    let entries = collect_source_entries(&source_workspace.path, &mut stats)?;
 
     if entries.is_empty() {
         println!(
             "No importable memory found in {}",
-            source_workspace.display()
+            source_workspace.path.display()
         );
         println!("Checked for: memory/brain.db, MEMORY.md, memory/*.md");
         return Ok(());
     }
 
     if dry_run {
-        println!("🔎 Dry run: OpenClaw migration preview");
-        println!("  Source: {}", source_workspace.display());
-        println!("  Target: {}", config.workspace_dir.display());
-        println!("  Candidates: {}", entries.len());
-        println!("    - from sqlite:   {}", stats.from_sqlite);
-        println!("    - from markdown: {}", stats.from_markdown);
-        println!();
-        println!("Run without --dry-run to import these entries.");
+        print_dry_run_preview(
+            &source_workspace.path,
+            &config.workspace_dir,
+            entries.len(),
+            &stats,
+            false,
+        );
         return Ok(());
     }
 
@@ -102,7 +110,7 @@ async fn migrate_openclaw_memory(
     }
 
     println!("✅ OpenClaw memory migration complete");
-    println!("  Source: {}", source_workspace.display());
+    println!("  Source: {}", source_workspace.path.display());
     println!("  Target: {}", config.workspace_dir.display());
     println!("  Imported:         {}", stats.imported);
     println!("  Skipped unchanged:{}", stats.skipped_unchanged);
@@ -172,7 +180,7 @@ fn read_openclaw_sqlite_entries(db_path: &Path) -> Result<Vec<SourceEntry>> {
     let category_expr = pick_column_expr(&columns, &["category", "kind", "type"], "'core'");
 
     let sql = format!(
-        "SELECT {key_expr} AS key, {content_expr} AS content, {category_expr} AS category FROM memories"
+        "SELECT {key_expr} AS key, {content_expr} AS content, {category_expr} AS category FROM memories ORDER BY rowid ASC"
     );
 
     let mut stmt = conn.prepare(&sql)?;
@@ -220,12 +228,16 @@ fn read_openclaw_markdown_entries(source_workspace: &Path) -> Result<Vec<SourceE
 
     let daily_dir = source_workspace.join("memory");
     if daily_dir.exists() {
+        let mut markdown_paths = Vec::new();
         for file in fs::read_dir(&daily_dir)? {
-            let file = file?;
-            let path = file.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
-                continue;
+            let path = file?.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
+                markdown_paths.push(path);
             }
+        }
+        markdown_paths.sort();
+
+        for path in markdown_paths {
             let content = fs::read_to_string(&path)?;
             let stem = path
                 .file_stem()
@@ -350,16 +362,23 @@ fn pick_column_expr(columns: &[String], candidates: &[&str], fallback: &str) -> 
     pick_optional_column_expr(columns, candidates).unwrap_or_else(|| fallback.to_string())
 }
 
-fn resolve_openclaw_workspace(source: Option<PathBuf>) -> Result<PathBuf> {
+fn resolve_openclaw_workspace(source: Option<PathBuf>) -> SourceWorkspace {
     if let Some(src) = source {
-        return Ok(src);
+        return SourceWorkspace {
+            path: src,
+            kind: SourceWorkspaceKind::Explicit,
+        };
     }
 
-    let home = UserDirs::new()
-        .map(|u| u.home_dir().to_path_buf())
-        .context("Could not find home directory")?;
+    let path = UserDirs::new().map_or_else(
+        || PathBuf::from(".openclaw").join("workspace"),
+        |dirs| dirs.home_dir().join(".openclaw").join("workspace"),
+    );
 
-    Ok(home.join(".openclaw").join("workspace"))
+    SourceWorkspace {
+        path,
+        kind: SourceWorkspaceKind::Default,
+    }
 }
 
 fn paths_equal(a: &Path, b: &Path) -> bool {
@@ -367,6 +386,61 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
         (Ok(a), Ok(b)) => a == b,
         _ => a == b,
     }
+}
+
+fn print_dry_run_preview(
+    source_workspace: &Path,
+    target_workspace: &Path,
+    candidates: usize,
+    stats: &MigrationStats,
+    skipped_memory_migration: bool,
+) {
+    println!("🔎 Dry run: OpenClaw migration preview");
+    println!("  Source: {}", source_workspace.display());
+    println!("  Target: {}", target_workspace.display());
+    println!("  Candidates: {}", candidates);
+    println!("    - from sqlite:   {}", stats.from_sqlite);
+    println!("    - from markdown: {}", stats.from_markdown);
+    println!();
+    if skipped_memory_migration {
+        println!("  Notes:");
+        println!("    - memory migration skipped: default OpenClaw workspace not found");
+        println!("    - config migration skipped: no config import is performed by this command");
+        println!();
+    }
+    println!("Run without --dry-run to import these entries.");
+}
+
+fn handle_missing_source_workspace(
+    config: &Config,
+    source_workspace: &SourceWorkspace,
+    dry_run: bool,
+) -> Result<()> {
+    if source_workspace.kind == SourceWorkspaceKind::Explicit {
+        bail!(
+            "OpenClaw workspace not found at {}. Pass --source <path> if needed.",
+            source_workspace.path.display()
+        );
+    }
+
+    if dry_run {
+        print_dry_run_preview(
+            &source_workspace.path,
+            &config.workspace_dir,
+            0,
+            &MigrationStats::default(),
+            true,
+        );
+        return Ok(());
+    }
+
+    println!(
+        "No OpenClaw workspace found at default source {}",
+        source_workspace.path.display()
+    );
+    println!("Skipping memory migration because no default source data is available.");
+    println!("Config migration skipped: this command only imports memory entries.");
+    Ok(())
 }
 
 fn backup_target_memory(workspace_dir: &Path) -> Result<Option<PathBuf>> {
@@ -546,6 +620,52 @@ mod tests {
     }
 
     #[test]
+    fn missing_default_source_is_tolerated_for_preview() {
+        let target = TempDir::new().unwrap();
+        let config = test_config(target.path());
+        let source = SourceWorkspace {
+            path: target.path().join("missing-openclaw-workspace"),
+            kind: SourceWorkspaceKind::Default,
+        };
+
+        let result = handle_missing_source_workspace(&config, &source, true);
+        assert!(
+            result.is_ok(),
+            "dry-run preview should not fail for missing default source"
+        );
+    }
+
+    #[test]
+    fn missing_default_source_is_tolerated_for_execution() {
+        let target = TempDir::new().unwrap();
+        let config = test_config(target.path());
+        let source = SourceWorkspace {
+            path: target.path().join("missing-openclaw-workspace"),
+            kind: SourceWorkspaceKind::Default,
+        };
+
+        let result = handle_missing_source_workspace(&config, &source, false);
+        assert!(
+            result.is_ok(),
+            "default source absence should become a no-op"
+        );
+    }
+
+    #[test]
+    fn missing_explicit_source_still_fails() {
+        let target = TempDir::new().unwrap();
+        let config = test_config(target.path());
+        let source = SourceWorkspace {
+            path: target.path().join("missing-explicit-source"),
+            kind: SourceWorkspaceKind::Explicit,
+        };
+
+        let err = handle_missing_source_workspace(&config, &source, true)
+            .expect_err("explicit source must still error when missing");
+        assert!(err.to_string().contains("OpenClaw workspace not found"));
+    }
+
+    #[test]
     fn migration_target_rejects_none_backend() {
         let target = TempDir::new().unwrap();
         let mut config = test_config(target.path());
@@ -625,6 +745,20 @@ mod tests {
             0,
             "entries with empty/whitespace content must be skipped"
         );
+    }
+
+    #[test]
+    fn markdown_entries_are_sorted_for_deterministic_order() {
+        let source = TempDir::new().unwrap();
+        let memory_dir = source.path().join("memory");
+        fs::create_dir_all(&memory_dir).unwrap();
+        fs::write(memory_dir.join("b.md"), "- b note").unwrap();
+        fs::write(memory_dir.join("a.md"), "- a note").unwrap();
+
+        let entries = read_openclaw_markdown_entries(source.path()).unwrap();
+        let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
+
+        assert_eq!(keys, vec!["openclaw_a_1", "openclaw_b_1"]);
     }
 
     #[test]
