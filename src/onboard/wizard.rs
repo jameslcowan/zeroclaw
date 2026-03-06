@@ -744,7 +744,9 @@ async fn run_quick_setup_with_home(
     let provider_name = provider
         .ok_or_else(|| anyhow::anyhow!(
             "Provider is required. Use --provider <name> or run with --interactive for the TUI wizard.\n\
-            \nSupported providers: openrouter, openai, anthropic, gemini, ollama, groq, mistral, deepseek, xai, and more."
+            \nLocal-first (recommended): ollama, llamacpp, sglang, vllm\n\
+            \nCloud providers: openai, anthropic, gemini, openrouter, groq, mistral, deepseek, xai, and more.\n\
+            \nTip: Install ollama with: curl -fsSL https://ollama.com/install.sh | sh"
         ))?
         .to_string();
     let model = model_override
@@ -2210,8 +2212,9 @@ pub async fn run_models_refresh(
     {
         Some(p) => p.trim().to_string(),
         None => anyhow::bail!(
-            "No provider configured. Run `zeroclaw onboard --interactive` or set a provider with `--provider <name>`.\n\
-            \nSupported providers: openrouter, openai, anthropic, gemini, ollama, groq, mistral, deepseek, xai, and more."
+            "No provider configured. Run `zeroclaw onboard --interactive-ui` or set a provider with `--provider <name>`.\n\
+            \nLocal-first (recommended): ollama, llamacpp, sglang, vllm\n\
+            \nCloud providers: openai, anthropic, gemini, openrouter, groq, mistral, deepseek, xai, and more."
         ),
     };
 
@@ -2298,8 +2301,9 @@ pub async fn run_models_list(config: &Config, provider_override: Option<&str>) -
     {
         Some(p) => p.to_string(),
         None => anyhow::bail!(
-            "No provider configured. Run `zeroclaw onboard --interactive` or specify `--provider <name>`.\n\
-            \nSupported providers: openrouter, openai, anthropic, gemini, ollama, groq, mistral, deepseek, xai, and more."
+            "No provider configured. Run `zeroclaw onboard --interactive-ui` or specify `--provider <name>`.\n\
+            \nLocal-first (recommended): ollama, llamacpp, sglang, vllm\n\
+            \nCloud providers: openai, anthropic, gemini, openrouter, groq, mistral, deepseek, xai, and more."
         ),
     };
 
@@ -2613,11 +2617,11 @@ async fn setup_workspace() -> Result<(PathBuf, PathBuf)> {
 async fn setup_provider(workspace_dir: &Path) -> Result<(String, String, String, Option<String>)> {
     // ── Tier selection ──
     let tiers = vec![
-        "⭐ Recommended (OpenRouter, Venice, Anthropic, OpenAI, Gemini, GitHub Copilot)",
+        "🏠 Local / private (Ollama, llama.cpp, vLLM — no API key, runs offline)",
+        "☁️ Cloud providers (OpenAI, Anthropic, Gemini, OpenRouter)",
         "⚡ Fast inference (Groq, Fireworks, Together AI, NVIDIA NIM)",
         "🌐 Gateway / proxy (Vercel AI, Cloudflare AI, Amazon Bedrock)",
         "🔬 Specialized (Moonshot/Kimi, GLM/Zhipu, MiniMax, Qwen/DashScope, Qianfan, Z.AI, Synthetic, OpenCode Zen, Cohere)",
-        "🏠 Local / private (Ollama, llama.cpp server, vLLM — no API key needed)",
         "🔧 Custom — bring your own OpenAI-compatible API",
     ];
 
@@ -2628,14 +2632,13 @@ async fn setup_provider(workspace_dir: &Path) -> Result<(String, String, String,
         .interact()?;
 
     let providers: Vec<(&str, &str)> = match tier_idx {
-        0 => vec![
-            (
-                "openrouter",
-                "OpenRouter — 200+ models, 1 API key (recommended)",
-            ),
-            ("venice", "Venice AI — privacy-first (Llama, Opus)"),
-            ("anthropic", "Anthropic — Claude Sonnet & Opus (direct)"),
+        0 => local_provider_choices(),
+        1 => vec![
             ("openai", "OpenAI — GPT-4o, o1, GPT-5 (direct)"),
+            ("anthropic", "Anthropic — Claude Sonnet & Opus (direct)"),
+            ("gemini", "Google Gemini — Gemini 2.0 Flash & Pro (supports CLI auth)"),
+            ("openrouter", "OpenRouter — 200+ models, 1 API key"),
+            ("venice", "Venice AI — privacy-first (Llama, Opus)"),
             (
                 "openai-codex",
                 "OpenAI Codex (ChatGPT subscription OAuth, no API key)",
@@ -2648,12 +2651,8 @@ async fn setup_provider(workspace_dir: &Path) -> Result<(String, String, String,
             ("mistral", "Mistral — Large & Codestral"),
             ("xai", "xAI — Grok 3 & 4"),
             ("perplexity", "Perplexity — search-augmented AI"),
-            (
-                "gemini",
-                "Google Gemini — Gemini 2.0 Flash & Pro (supports CLI auth)",
-            ),
         ],
-        1 => vec![
+        2 => vec![
             ("groq", "Groq — ultra-fast LPU inference"),
             ("fireworks", "Fireworks AI — fast open-source inference"),
             ("novita", "Novita AI — affordable open-source inference"),
@@ -2664,7 +2663,7 @@ async fn setup_provider(workspace_dir: &Path) -> Result<(String, String, String,
             ("huggingface", "Hugging Face — hosted model router"),
             ("replicate", "Replicate — hosted open-source models"),
         ],
-        2 => vec![
+        3 => vec![
             ("vercel", "Vercel AI Gateway"),
             ("cloudflare", "Cloudflare AI Gateway"),
             (
@@ -2673,7 +2672,7 @@ async fn setup_provider(workspace_dir: &Path) -> Result<(String, String, String,
             ),
             ("bedrock", "Amazon Bedrock — AWS managed models"),
         ],
-        3 => vec![
+        4 => vec![
             (
                 "kimi-code",
                 "Kimi Code — coding-optimized Kimi API (KimiCLI)",
@@ -2716,7 +2715,6 @@ async fn setup_provider(workspace_dir: &Path) -> Result<(String, String, String,
             ("cohere", "Cohere — Command R+ & embeddings"),
             ("ai21", "AI21 Labs — Jamba model family"),
         ],
-        4 => local_provider_choices(),
         _ => vec![], // Custom — handled below
     };
 
@@ -3379,20 +3377,11 @@ async fn setup_provider(workspace_dir: &Path) -> Result<(String, String, String,
 
 fn local_provider_choices() -> Vec<(&'static str, &'static str)> {
     vec![
-        ("ollama", "Ollama — local models (Llama, Mistral, Phi)"),
-        (
-            "llamacpp",
-            "llama.cpp server — local OpenAI-compatible endpoint",
-        ),
-        (
-            "sglang",
-            "SGLang — high-performance local serving framework",
-        ),
+        ("ollama", "Ollama — local models, no API key (recommended)"),
+        ("llamacpp", "llama.cpp server — local OpenAI-compatible endpoint"),
+        ("sglang", "SGLang — high-performance local serving framework"),
         ("vllm", "vLLM — high-performance local inference engine"),
-        (
-            "osaurus",
-            "Osaurus — unified AI edge runtime (local MLX + cloud proxy + MCP)",
-        ),
+        ("osaurus", "Osaurus — unified AI edge runtime (local MLX + cloud proxy + MCP)"),
     ]
 }
 

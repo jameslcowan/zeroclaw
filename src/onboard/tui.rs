@@ -26,7 +26,7 @@ use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::time::Duration;
 
-const PROVIDER_OPTIONS: [&str; 6] = ["(select provider)", "openrouter", "openai", "anthropic", "gemini", "ollama"];
+const PROVIDER_OPTIONS: [&str; 6] = ["(select provider)", "ollama", "openai", "anthropic", "gemini", "openrouter"];
 const MEMORY_OPTIONS: [&str; 4] = ["sqlite", "lucid", "markdown", "none"];
 const TUNNEL_OPTIONS: [&str; 3] = ["none", "cloudflare", "ngrok"];
 
@@ -2469,7 +2469,7 @@ mod tests {
     #[test]
     fn provider_probe_skips_without_required_api_key() {
         let mut plan = sample_plan();
-        plan.provider_idx = 1; // openai
+        plan.provider_idx = 2; // openai (index 0 = select, 1 = ollama, 2 = openai)
         plan.api_key.clear();
 
         let status = run_provider_probe(&plan);
@@ -2487,6 +2487,9 @@ mod tests {
     fn review_validation_blocks_failed_diagnostics_by_default() {
         let workspace = Path::new("/tmp/zeroclaw-review-gate").to_path_buf();
         let mut state = TuiState::new(workspace, true);
+        // Set up valid provider selection so provider validation passes
+        state.plan.provider_idx = 2; // openai
+        state.plan.model = "gpt-4o".to_string();
         state.provider_probe = CheckStatus::Failed("network timeout".to_string());
 
         let err = state
@@ -2501,6 +2504,9 @@ mod tests {
     fn review_validation_allows_failed_diagnostics_with_override() {
         let workspace = Path::new("/tmp/zeroclaw-review-gate-override").to_path_buf();
         let mut state = TuiState::new(workspace, true);
+        // Set up valid provider selection so provider validation passes
+        state.plan.provider_idx = 2; // openai
+        state.plan.model = "gpt-4o".to_string();
         state.provider_probe = CheckStatus::Failed("network timeout".to_string());
         state.plan.allow_failed_diagnostics = true;
 
@@ -2542,7 +2548,7 @@ mod tests {
     fn provider_remediation_recommends_api_key_for_skipped_cloud_provider() {
         let workspace = Path::new("/tmp/zeroclaw-provider-remediation").to_path_buf();
         let mut state = TuiState::new(workspace, true);
-        state.plan.provider_idx = 1; // openai
+        state.plan.provider_idx = 2; // openai (index 1 is openrouter)
         state.provider_probe =
             CheckStatus::Skipped("missing API key (required for OpenAI probe)".to_string());
 
@@ -2683,6 +2689,9 @@ mod tests {
         let workspace = Path::new("/tmp/zeroclaw-key-alias-review-apply").to_path_buf();
         let mut state = TuiState::new(workspace, true);
         state.step = Step::Review;
+        // Set up valid provider selection so review validation passes
+        state.plan.provider_idx = 2; // openai
+        state.plan.model = "gpt-4o".to_string();
 
         let action = state
             .handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE))

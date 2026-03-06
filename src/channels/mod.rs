@@ -1120,7 +1120,10 @@ fn resolved_default_provider(config: &Config) -> String {
     config
         .default_provider
         .clone()
-        .unwrap_or_else(|| "openrouter".to_string())
+        .unwrap_or_else(|| {
+            tracing::warn!("No default provider configured. Run `zeroclaw onboard --interactive-ui` to configure one.");
+            "(not configured)".to_string()
+        })
 }
 
 fn resolved_default_model(config: &Config) -> String {
