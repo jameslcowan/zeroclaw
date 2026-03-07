@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Canonical remote installer entrypoint.
-# Default behavior for no-arg interactive shells is guided interactive onboarding.
+# Default behavior for no-arg interactive shells is full bootstrap
+# (system deps + Rust when needed) plus interactive onboarding.
 
 BOOTSTRAP_URL="${ZEROCLAW_BOOTSTRAP_URL:-https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/refs/heads/main/scripts/bootstrap.sh}"
 
@@ -42,7 +43,7 @@ declare -a FORWARDED_ARGS=("$@")
 # In piped one-liners (`curl ... | bash`) stdin is not a TTY; prefer the
 # controlling terminal when available so interactive onboarding is still default.
 if [[ $# -eq 0 && -t 1 ]] && (: </dev/tty) 2>/dev/null; then
-  FORWARDED_ARGS=(--interactive-onboard)
+  FORWARDED_ARGS=(--install-system-deps --install-rust --interactive-onboard)
 fi
 
 if [[ -x "$LOCAL_INSTALLER" ]]; then
