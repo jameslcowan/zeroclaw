@@ -47,7 +47,14 @@ if [[ $# -eq 0 && -t 1 ]] && (: </dev/tty) 2>/dev/null; then
 fi
 
 if [[ -x "$LOCAL_INSTALLER" ]]; then
+  if [[ ${#FORWARDED_ARGS[@]} -eq 0 ]]; then
+    exec "$LOCAL_INSTALLER"
+  fi
   exec "$LOCAL_INSTALLER" "${FORWARDED_ARGS[@]}"
 fi
 
-run_remote_bootstrap "${FORWARDED_ARGS[@]}"
+if [[ ${#FORWARDED_ARGS[@]} -eq 0 ]]; then
+  run_remote_bootstrap
+else
+  run_remote_bootstrap "${FORWARDED_ARGS[@]}"
+fi
