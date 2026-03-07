@@ -1,8 +1,9 @@
-name: Beta Release
+name: Daily Beta Release
 
 on:
-  push:
-    branches: [master]
+  schedule:
+    - cron: '0 8 * * *'  # Daily at 08:00 UTC
+  workflow_dispatch: {}
 
 concurrency:
   group: release
@@ -59,6 +60,10 @@ jobs:
             linker: aarch64-linux-gnu-gcc
           - os: macos-14
             target: aarch64-apple-darwin
+            artifact: zeroclaw
+            ext: tar.gz
+          - os: macos-14
+            target: x86_64-apple-darwin
             artifact: zeroclaw
             ext: tar.gz
           - os: windows-latest
@@ -124,16 +129,15 @@ jobs:
           cat SHA256SUMS
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.version.outputs.tag }}
-          name: ${{ needs.version.outputs.tag }}
-          prerelease: true
-          generate_release_notes: true
-          files: |
-            artifacts/**/*
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ needs.version.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ needs.version.outputs.tag }}" \
+            --prerelease \
+            --generate-notes \
+            artifacts/**/*.tar.gz artifacts/**/*.zip artifacts/**/SHA256SUMS
 
   docker:
     name: Push Docker Image

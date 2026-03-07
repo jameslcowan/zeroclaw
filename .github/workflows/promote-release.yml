@@ -79,6 +79,10 @@ jobs:
             target: aarch64-apple-darwin
             artifact: zeroclaw
             ext: tar.gz
+          - os: macos-14
+            target: x86_64-apple-darwin
+            artifact: zeroclaw
+            ext: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: zeroclaw.exe
@@ -142,16 +146,15 @@ jobs:
           cat SHA256SUMS
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.validate.outputs.tag }}
-          name: ${{ needs.validate.outputs.tag }}
-          prerelease: false
-          generate_release_notes: true
-          files: |
-            artifacts/**/*
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ needs.validate.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ needs.validate.outputs.tag }}" \
+            --latest \
+            --generate-notes \
+            artifacts/**/*.tar.gz artifacts/**/*.zip artifacts/**/SHA256SUMS
 
   docker:
     name: Push Docker Image
