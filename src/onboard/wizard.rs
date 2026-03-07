@@ -1,7 +1,8 @@
+#[cfg(feature = "channel-nostr")]
+use crate::config::schema::{default_nostr_relays, NostrConfig};
 use crate::config::schema::{
-    default_nostr_relays, DingTalkConfig, IrcConfig, LarkReceiveMode, LinqConfig, NapcatConfig,
-    NextcloudTalkConfig, NostrConfig, ProgressMode, QQConfig, QQEnvironment, QQReceiveMode,
-    SignalConfig, StreamMode, WhatsAppConfig,
+    DingTalkConfig, IrcConfig, LarkReceiveMode, LinqConfig, NapcatConfig, NextcloudTalkConfig,
+    ProgressMode, QQConfig, QQEnvironment, QQReceiveMode, SignalConfig, StreamMode, WhatsAppConfig,
 };
 use crate::config::{
     AutonomyConfig, BrowserConfig, ChannelsConfig, ComposioConfig, Config, DiscordConfig,
@@ -4430,6 +4431,7 @@ enum ChannelMenuChoice {
     QqOfficial,
     Napcat,
     LarkFeishu,
+    #[cfg(feature = "channel-nostr")]
     Nostr,
     Done,
 }
@@ -4450,6 +4452,7 @@ const CHANNEL_MENU_CHOICES: &[ChannelMenuChoice] = &[
     ChannelMenuChoice::QqOfficial,
     ChannelMenuChoice::Napcat,
     ChannelMenuChoice::LarkFeishu,
+    #[cfg(feature = "channel-nostr")]
     ChannelMenuChoice::Nostr,
     ChannelMenuChoice::Done,
 ];
@@ -4591,6 +4594,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                         "— Lark/Feishu Bot"
                     }
                 ),
+                #[cfg(feature = "channel-nostr")]
                 ChannelMenuChoice::Nostr => format!(
                     "Nostr {}",
                     if config.nostr.is_some() {
@@ -6137,6 +6141,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     max_draft_edits: 20,
                 });
             }
+            #[cfg(feature = "channel-nostr")]
             ChannelMenuChoice::Nostr => {
                 // ── Nostr ──
                 println!();
@@ -6158,7 +6163,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     continue;
                 }
 
-                // Validate the key immediately
+                // Validate the key immediately when Nostr channel support is compiled in.
                 match nostr_sdk::Keys::parse(private_key.trim()) {
                     Ok(keys) => {
                         println!(

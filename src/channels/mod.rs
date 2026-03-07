@@ -33,6 +33,7 @@ pub mod matrix;
 pub mod mattermost;
 pub mod napcat;
 pub mod nextcloud_talk;
+#[cfg(feature = "channel-nostr")]
 pub mod nostr;
 pub mod qq;
 pub mod signal;
@@ -65,6 +66,7 @@ pub use matrix::MatrixChannel;
 pub use mattermost::MattermostChannel;
 pub use napcat::NapcatChannel;
 pub use nextcloud_talk::NextcloudTalkChannel;
+#[cfg(feature = "channel-nostr")]
 pub use nostr::NostrChannel;
 pub use qq::QQChannel;
 pub use signal::SignalChannel;
@@ -5613,20 +5615,36 @@ async fn append_nostr_channel_if_available(
     channels: &mut Vec<ConfiguredChannel>,
     startup_context: &str,
 ) -> Option<String> {
-    let ns = config.channels_config.nostr.as_ref()?;
-    match NostrChannel::new(&ns.private_key, ns.relays.clone(), &ns.allowed_pubkeys).await {
-        Ok(channel) => {
-            channels.push(ConfiguredChannel {
-                display_name: "Nostr",
-                channel: Arc::new(channel),
-            });
-            None
+    #[cfg(feature = "channel-nostr")]
+    {
+        let ns = config.channels_config.nostr.as_ref()?;
+        match NostrChannel::new(&ns.private_key, ns.relays.clone(), &ns.allowed_pubkeys).await {
+            Ok(channel) => {
+                channels.push(ConfiguredChannel {
+                    display_name: "Nostr",
+                    channel: Arc::new(channel),
+                });
+                None
+            }
+            Err(err) => {
+                let reason = format!("Nostr init failed during {startup_context}: {err}");
+                tracing::warn!("{reason}");
+                Some(reason)
+            }
         }
-        Err(err) => {
-            let reason = format!("Nostr init failed during {startup_context}: {err}");
+    }
+
+    #[cfg(not(feature = "channel-nostr"))]
+    {
+        let _ = channels;
+        if config.channels_config.nostr.is_some() {
+            let reason = format!(
+                "Nostr channel configured but this binary was built without feature `channel-nostr` (during {startup_context})"
+            );
             tracing::warn!("{reason}");
-            Some(reason)
+            return Some(reason);
         }
+        None
     }
 }
 
