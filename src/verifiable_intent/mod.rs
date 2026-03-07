@@ -4,6 +4,16 @@
 //! credential system: issuance of L2/L3 credentials, chain verification, and
 //! constraint evaluation for commerce-gated agent actions.
 //!
+//! # Attribution
+//!
+//! This implementation is based on the Verifiable Intent open specification and
+//! reference implementation by genereda, available at
+//! <https://github.com/genereda/verifiable-intent>, licensed under the
+//! Apache License, Version 2.0. This Rust-native reimplementation follows the
+//! VI specification design (SD-JWT layered credentials, constraint model,
+//! three-layer chain) without copying source code from the reference
+//! implementation.
+//!
 //! # Architecture
 //!
 //! - [`types`] — Core data models (credentials, mandates, constraints, keys).
