@@ -158,6 +158,7 @@ jobs:
         run: |
           gh release create "${{ needs.validate.outputs.tag }}" \
             --repo "${{ github.repository }}" \
+            --target "$GITHUB_SHA" \
             --title "${{ needs.validate.outputs.tag }}" \
             --latest \
             --generate-notes \

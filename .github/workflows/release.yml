@@ -142,6 +142,7 @@ jobs:
         run: |
           gh release create "${{ needs.version.outputs.tag }}" \
             --repo "${{ github.repository }}" \
+            --target "$GITHUB_SHA" \
             --title "${{ needs.version.outputs.tag }}" \
             --prerelease \
             --generate-notes \
