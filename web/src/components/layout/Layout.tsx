@@ -11,14 +11,22 @@ export default function Layout() {
     if (typeof window === 'undefined') {
       return false;
     }
-    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+    try {
+      return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+    } catch {
+      return false;
+    }
   });
 
   const toggleSidebarCollapsed = () => {
     setSidebarCollapsed((prev) => {
       const next = !prev;
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0');
+        try {
+          window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0');
+        } catch {
+          // Storage unavailable, ignore
+        }
       }
       return next;
     });

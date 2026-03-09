@@ -87,6 +87,9 @@ function PairingDialog({
         <form onSubmit={handleSubmit}>
           <input
             type="text"
+            aria-label={translate('auth.enter_code')}
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? 'pairing-error' : undefined}
             value={code}
             onChange={(e) => setCode(e.target.value)}
             placeholder={translate('auth.code_placeholder')}
@@ -95,7 +98,7 @@ function PairingDialog({
             autoFocus
           />
           {error && (
-            <p className="mb-4 text-center text-sm text-rose-300">{error}</p>
+            <p id="pairing-error" role="alert" className="mb-4 text-center text-sm text-rose-300">{error}</p>
           )}
           <button
             type="submit"

@@ -67,6 +67,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
         <button
           type="button"
           onClick={logout}
+          aria-label={t('auth.logout')}
           className="flex items-center gap-1 rounded-lg border border-[#2b4f97] bg-[#091937]/75 px-2.5 py-1.5 text-xs text-[#c4d8ff] transition hover:border-[#4f83ff] hover:text-white sm:gap-1.5 sm:px-3 sm:text-sm"
         >
           <LogOut className="h-4 w-4" />
