@@ -14,7 +14,8 @@ import {
   Stethoscope,
   X,
 } from 'lucide-react';
-import { t } from '@/lib/i18n';
+import { tLocale } from '@/lib/i18n';
+import { useLocaleContext } from '@/App';
 
 const COLLAPSE_BUTTON_DELAY_MS = 1000;
 
@@ -45,6 +46,9 @@ export default function Sidebar({
   onToggleCollapse,
 }: SidebarProps) {
   const [showCollapseButton, setShowCollapseButton] = useState(false);
+  const { locale } = useLocaleContext();
+
+  const t = (key: string) => tLocale(key, locale);
 
   useEffect(() => {
     const id = setTimeout(() => setShowCollapseButton(true), COLLAPSE_BUTTON_DELAY_MS);
