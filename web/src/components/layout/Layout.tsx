@@ -47,9 +47,11 @@ export default function Layout() {
           sidebarCollapsed ? 'md:ml-[6.25rem]' : 'md:ml-[17.5rem]',
         ].join(' ')}
       >
-        <Header onToggleSidebar={() => setSidebarOpen((open) => !open)} />
+        <div className="relative z-50">
+          <Header onToggleSidebar={() => setSidebarOpen((open) => !open)} />
+        </div>
 
-        <main className="flex-1 overflow-y-auto px-4 pb-8 pt-5 md:px-8 md:pt-8">
+        <main className="relative z-10 flex-1 overflow-y-auto px-4 pb-8 pt-5 md:px-8 md:pt-8">
           <Outlet />
         </main>
       </div>
