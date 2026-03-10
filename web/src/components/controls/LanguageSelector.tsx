@@ -2,7 +2,6 @@ import { Check, ChevronDown } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import {
   getLanguageOption,
-  getLanguageOptionLabel,
   getLocaleDirection,
   LANGUAGE_OPTIONS,
   type Locale,
@@ -58,7 +57,6 @@ export default function LanguageSelector({
   return (
     <div ref={containerRef} className="relative" dir={localeDirection}>
       <button
-        id="locale-selector-trigger"
         type="button"
         data-testid="locale-select"
         aria-label={ariaLabel}
@@ -75,7 +73,7 @@ export default function LanguageSelector({
         >
           {activeLanguage.flag}
         </span>
-        <span dir={localeDirection} className="min-w-0 truncate text-start">{getLanguageOptionLabel(activeLanguage)}</span>
+        <span dir={localeDirection} className="min-w-0 truncate text-start">{activeLanguage.label}</span>
         <ChevronDown className={`h-4 w-4 shrink-0 transition ${open ? 'rotate-180' : ''}`} />
       </button>
 
@@ -115,7 +113,7 @@ export default function LanguageSelector({
                     {option.flag}
                   </span>
                   <span dir={option.direction} className="min-w-0 flex-1 truncate text-start">
-                    {getLanguageOptionLabel(option)}
+                    {option.label}
                   </span>
                   {selected ? <Check className="h-4 w-4 shrink-0 text-[#8cc2ff]" /> : null}
                 </button>

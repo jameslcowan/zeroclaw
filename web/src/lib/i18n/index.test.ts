@@ -3,11 +3,10 @@ import {
   applyLocaleToDocument,
   coerceLocale,
   getLanguageOption,
-  getLanguageOptionLabel,
   getLocaleDirection,
   LANGUAGE_OPTIONS,
   LANGUAGE_SWITCH_ORDER,
-} from './i18n';
+} from '.';
 
 describe('language metadata', () => {
   it('keeps language options aligned with switch order', () => {
@@ -18,7 +17,7 @@ describe('language metadata', () => {
   it('provides a flag-backed label for every locale', () => {
     for (const option of LANGUAGE_OPTIONS) {
       expect(getLanguageOption(option.value)).toEqual(option);
-      expect(getLanguageOptionLabel(option)).toBe(option.label);
+      expect(option.label.length).toBeGreaterThan(0);
       expect(option.flag.length).toBeGreaterThan(0);
     }
   });
