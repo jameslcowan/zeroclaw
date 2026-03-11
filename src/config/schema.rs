@@ -456,6 +456,58 @@ fn parse_skills_prompt_injection_mode(raw: &str) -> Option<SkillsPromptInjection
     }
 }
 
+/// Skill security audit configuration (`[skills.security_audit]` section).
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SkillSecurityAuditConfig {
+    /// Master toggle for skill security auditing.
+    /// When false (default), all audit checks are skipped.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Block script files (.sh, .bash, .zsh, .ksh, .fish, .ps1, .bat, .cmd) and shell shebangs.
+    #[serde(default = "default_true")]
+    pub block_script_files: bool,
+    /// Block symlinks in skill packages.
+    #[serde(default = "default_true")]
+    pub block_symlinks: bool,
+    /// Detect high-risk command patterns (curl|sh, rm -rf /, fork bombs, etc.).
+    #[serde(default = "default_true")]
+    pub detect_high_risk_patterns: bool,
+    /// Block shell chaining operators (&&, ||, ;, backticks, $()) in TOML tool commands.
+    #[serde(default = "default_true")]
+    pub block_shell_chaining: bool,
+    /// Validate markdown links (escape links, remote markdown, absolute paths).
+    #[serde(default = "default_true")]
+    pub validate_markdown_links: bool,
+    /// Enforce file size limit (512KB) on md/toml files.
+    #[serde(default = "default_true")]
+    pub enforce_file_size_limit: bool,
+}
+
+impl Default for SkillSecurityAuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            block_script_files: true,
+            block_symlinks: true,
+            detect_high_risk_patterns: true,
+            block_shell_chaining: true,
+            validate_markdown_links: true,
+            enforce_file_size_limit: true,
+        }
+    }
+}
+
+impl SkillSecurityAuditConfig {
+    /// Returns a config with all checks enabled (for explicit `zeroclaw skills audit` commands).
+    pub fn all_enabled() -> Self {
+        Self {
+            enabled: true,
+            ..Self::default()
+        }
+    }
+}
+
 /// Skills loading configuration (`[skills]` section).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct SkillsConfig {
@@ -471,6 +523,9 @@ pub struct SkillsConfig {
     /// `full` preserves legacy behavior. `compact` keeps context small and loads skills on demand.
     #[serde(default)]
     pub prompt_injection_mode: SkillsPromptInjectionMode,
+    /// Security audit configuration for skill packages.
+    #[serde(default)]
+    pub security_audit: SkillSecurityAuditConfig,
 }
 
 /// Multimodal (image) handling configuration (`[multimodal]` section).
@@ -4470,6 +4525,23 @@ impl Config {
                     tracing::warn!(
                         "Ignoring invalid ZEROCLAW_SKILLS_PROMPT_MODE (valid: full|compact)"
                     );
+                }
+            }
+        }
+
+        // Skill security audit master toggle: ZEROCLAW_SKILL_SECURITY_AUDIT
+        if let Ok(flag) = std::env::var("ZEROCLAW_SKILL_SECURITY_AUDIT") {
+            if !flag.trim().is_empty() {
+                match flag.trim().to_ascii_lowercase().as_str() {
+                    "1" | "true" | "yes" | "on" => {
+                        self.skills.security_audit.enabled = true;
+                    }
+                    "0" | "false" | "no" | "off" => {
+                        self.skills.security_audit.enabled = false;
+                    }
+                    _ => tracing::warn!(
+                        "Ignoring invalid ZEROCLAW_SKILL_SECURITY_AUDIT (valid: 1|0|true|false|yes|no|on|off)"
+                    ),
                 }
             }
         }

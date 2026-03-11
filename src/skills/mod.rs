@@ -73,7 +73,8 @@ fn default_version() -> String {
 
 /// Load all skills from the workspace skills directory
 pub fn load_skills(workspace_dir: &Path) -> Vec<Skill> {
-    load_skills_with_open_skills_config(workspace_dir, None, None)
+    let audit_config = crate::config::SkillSecurityAuditConfig::default();
+    load_skills_with_open_skills_config(workspace_dir, None, None, &audit_config)
 }
 
 /// Load skills using runtime config values (preferred at runtime).
@@ -82,6 +83,7 @@ pub fn load_skills_with_config(workspace_dir: &Path, config: &crate::config::Con
         workspace_dir,
         Some(config.skills.open_skills_enabled),
         config.skills.open_skills_dir.as_deref(),
+        &config.skills.security_audit,
     )
 }
 
@@ -89,25 +91,32 @@ fn load_skills_with_open_skills_config(
     workspace_dir: &Path,
     config_open_skills_enabled: Option<bool>,
     config_open_skills_dir: Option<&str>,
+    audit_config: &crate::config::SkillSecurityAuditConfig,
 ) -> Vec<Skill> {
     let mut skills = Vec::new();
 
     if let Some(open_skills_dir) =
         ensure_open_skills_repo(config_open_skills_enabled, config_open_skills_dir)
     {
-        skills.extend(load_open_skills(&open_skills_dir));
+        skills.extend(load_open_skills(&open_skills_dir, audit_config));
     }
 
-    skills.extend(load_workspace_skills(workspace_dir));
+    skills.extend(load_workspace_skills(workspace_dir, audit_config));
     skills
 }
 
-fn load_workspace_skills(workspace_dir: &Path) -> Vec<Skill> {
+fn load_workspace_skills(
+    workspace_dir: &Path,
+    audit_config: &crate::config::SkillSecurityAuditConfig,
+) -> Vec<Skill> {
     let skills_dir = workspace_dir.join("skills");
-    load_skills_from_directory(&skills_dir)
+    load_skills_from_directory(&skills_dir, audit_config)
 }
 
-fn load_skills_from_directory(skills_dir: &Path) -> Vec<Skill> {
+fn load_skills_from_directory(
+    skills_dir: &Path,
+    audit_config: &crate::config::SkillSecurityAuditConfig,
+) -> Vec<Skill> {
     if !skills_dir.exists() {
         return Vec::new();
     }
@@ -124,22 +133,24 @@ fn load_skills_from_directory(skills_dir: &Path) -> Vec<Skill> {
             continue;
         }
 
-        match audit::audit_skill_directory(&path) {
-            Ok(report) if report.is_clean() => {}
-            Ok(report) => {
-                tracing::warn!(
-                    "skipping insecure skill directory {}: {}",
-                    path.display(),
-                    report.summary()
-                );
-                continue;
-            }
-            Err(err) => {
-                tracing::warn!(
-                    "skipping unauditable skill directory {}: {err}",
-                    path.display()
-                );
-                continue;
+        if audit_config.enabled {
+            match audit::audit_skill_directory(&path, audit_config) {
+                Ok(report) if report.is_clean() => {}
+                Ok(report) => {
+                    tracing::warn!(
+                        "skipping insecure skill directory {}: {}",
+                        path.display(),
+                        report.summary()
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "skipping unauditable skill directory {}: {err}",
+                        path.display()
+                    );
+                    continue;
+                }
             }
         }
 
@@ -161,13 +172,16 @@ fn load_skills_from_directory(skills_dir: &Path) -> Vec<Skill> {
     skills
 }
 
-fn load_open_skills(repo_dir: &Path) -> Vec<Skill> {
+fn load_open_skills(
+    repo_dir: &Path,
+    audit_config: &crate::config::SkillSecurityAuditConfig,
+) -> Vec<Skill> {
     // Modern open-skills layout stores skill packages in `skills/<name>/SKILL.md`.
     // Prefer that structure to avoid treating repository docs (e.g. CONTRIBUTING.md)
     // as executable skills.
     let nested_skills_dir = repo_dir.join("skills");
     if nested_skills_dir.is_dir() {
-        return load_skills_from_directory(&nested_skills_dir);
+        return load_skills_from_directory(&nested_skills_dir, audit_config);
     }
 
     let mut skills = Vec::new();
@@ -198,22 +212,24 @@ fn load_open_skills(repo_dir: &Path) -> Vec<Skill> {
             continue;
         }
 
-        match audit::audit_open_skill_markdown(&path, repo_dir) {
-            Ok(report) if report.is_clean() => {}
-            Ok(report) => {
-                tracing::warn!(
-                    "skipping insecure open-skill file {}: {}",
-                    path.display(),
-                    report.summary()
-                );
-                continue;
-            }
-            Err(err) => {
-                tracing::warn!(
-                    "skipping unauditable open-skill file {}: {err}",
-                    path.display()
-                );
-                continue;
+        if audit_config.enabled {
+            match audit::audit_open_skill_markdown(&path, repo_dir, audit_config) {
+                Ok(report) if report.is_clean() => {}
+                Ok(report) => {
+                    tracing::warn!(
+                        "skipping insecure open-skill file {}: {}",
+                        path.display(),
+                        report.summary()
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "skipping unauditable open-skill file {}: {err}",
+                        path.display()
+                    );
+                    continue;
+                }
             }
         }
 
@@ -709,10 +725,16 @@ fn detect_newly_installed_directory(
     }
 }
 
-fn enforce_skill_security_audit(skill_path: &Path) -> Result<audit::SkillAuditReport> {
-    let report = audit::audit_skill_directory(skill_path)?;
+fn enforce_skill_security_audit(
+    skill_path: &Path,
+    audit_config: &crate::config::SkillSecurityAuditConfig,
+) -> Result<Option<audit::SkillAuditReport>> {
+    if !audit_config.enabled {
+        return Ok(None);
+    }
+    let report = audit::audit_skill_directory(skill_path, audit_config)?;
     if report.is_clean() {
-        return Ok(report);
+        return Ok(Some(report));
     }
 
     anyhow::bail!("Skill security audit failed: {}", report.summary());
@@ -772,7 +794,11 @@ fn copy_dir_recursive_secure(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-fn install_local_skill_source(source: &str, skills_path: &Path) -> Result<(PathBuf, usize)> {
+fn install_local_skill_source(
+    source: &str,
+    skills_path: &Path,
+    audit_config: &crate::config::SkillSecurityAuditConfig,
+) -> Result<(PathBuf, usize)> {
     let source_path = PathBuf::from(source);
     if !source_path.exists() {
         anyhow::bail!("Source path does not exist: {source}");
@@ -781,7 +807,7 @@ fn install_local_skill_source(source: &str, skills_path: &Path) -> Result<(PathB
     let source_path = source_path
         .canonicalize()
         .with_context(|| format!("failed to canonicalize source path {source}"))?;
-    let _ = enforce_skill_security_audit(&source_path)?;
+    let _ = enforce_skill_security_audit(&source_path, audit_config)?;
 
     let name = source_path
         .file_name()
@@ -796,8 +822,9 @@ fn install_local_skill_source(source: &str, skills_path: &Path) -> Result<(PathB
         return Err(err);
     }
 
-    match enforce_skill_security_audit(&dest) {
-        Ok(report) => Ok((dest, report.files_scanned)),
+    match enforce_skill_security_audit(&dest, audit_config) {
+        Ok(Some(report)) => Ok((dest, report.files_scanned)),
+        Ok(None) => Ok((dest, 0)),
         Err(err) => {
             let _ = std::fs::remove_dir_all(&dest);
             Err(err)
@@ -805,7 +832,11 @@ fn install_local_skill_source(source: &str, skills_path: &Path) -> Result<(PathB
     }
 }
 
-fn install_git_skill_source(source: &str, skills_path: &Path) -> Result<(PathBuf, usize)> {
+fn install_git_skill_source(
+    source: &str,
+    skills_path: &Path,
+    audit_config: &crate::config::SkillSecurityAuditConfig,
+) -> Result<(PathBuf, usize)> {
     let before = snapshot_skill_children(skills_path)?;
     let output = std::process::Command::new("git")
         .args(["clone", "--depth", "1", source])
@@ -818,8 +849,9 @@ fn install_git_skill_source(source: &str, skills_path: &Path) -> Result<(PathBuf
 
     let installed_dir = detect_newly_installed_directory(skills_path, &before)?;
     remove_git_metadata(&installed_dir)?;
-    match enforce_skill_security_audit(&installed_dir) {
-        Ok(report) => Ok((installed_dir, report.files_scanned)),
+    match enforce_skill_security_audit(&installed_dir, audit_config) {
+        Ok(Some(report)) => Ok((installed_dir, report.files_scanned)),
+        Ok(None) => Ok((installed_dir, 0)),
         Err(err) => {
             let _ = std::fs::remove_dir_all(&installed_dir);
             Err(err)
@@ -882,7 +914,10 @@ pub fn handle_command(command: crate::SkillCommands, config: &crate::config::Con
                 anyhow::bail!("Skill source or installed skill not found: {source}");
             }
 
-            let report = audit::audit_skill_directory(&target)?;
+            let report = audit::audit_skill_directory(
+                &target,
+                &crate::config::SkillSecurityAuditConfig::all_enabled(),
+            )?;
             if report.is_clean() {
                 println!(
                     "  {} Skill audit passed for {} ({} files scanned).",
@@ -906,31 +941,56 @@ pub fn handle_command(command: crate::SkillCommands, config: &crate::config::Con
         crate::SkillCommands::Install { source } => {
             println!("Installing skill from: {source}");
 
+            let audit_config = &config.skills.security_audit;
             let skills_path = skills_dir(workspace_dir);
             std::fs::create_dir_all(&skills_path)?;
 
             if is_git_source(&source) {
                 let (installed_dir, files_scanned) =
-                    install_git_skill_source(&source, &skills_path)
+                    install_git_skill_source(&source, &skills_path, audit_config)
                         .with_context(|| format!("failed to install git skill source: {source}"))?;
                 println!(
-                    "  {} Skill installed and audited: {} ({} files scanned)",
+                    "  {} Skill installed{}: {}{}",
                     console::style("✓").green().bold(),
+                    if audit_config.enabled {
+                        " and audited"
+                    } else {
+                        ""
+                    },
                     installed_dir.display(),
-                    files_scanned
+                    if audit_config.enabled {
+                        format!(" ({files_scanned} files scanned)")
+                    } else {
+                        String::new()
+                    }
                 );
             } else {
-                let (dest, files_scanned) = install_local_skill_source(&source, &skills_path)
-                    .with_context(|| format!("failed to install local skill source: {source}"))?;
+                let (dest, files_scanned) =
+                    install_local_skill_source(&source, &skills_path, audit_config).with_context(
+                        || format!("failed to install local skill source: {source}"),
+                    )?;
                 println!(
-                    "  {} Skill installed and audited: {} ({} files scanned)",
+                    "  {} Skill installed{}: {}{}",
                     console::style("✓").green().bold(),
+                    if audit_config.enabled {
+                        " and audited"
+                    } else {
+                        ""
+                    },
                     dest.display(),
-                    files_scanned
+                    if audit_config.enabled {
+                        format!(" ({files_scanned} files scanned)")
+                    } else {
+                        String::new()
+                    }
                 );
             }
 
-            println!("  Security audit completed successfully.");
+            if audit_config.enabled {
+                println!("  Security audit completed successfully.");
+            } else {
+                println!("  Security audit skipped (disabled in config).");
+            }
             Ok(())
         }
         crate::SkillCommands::Remove { name } => {
