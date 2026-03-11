@@ -1257,7 +1257,7 @@ MSG
 
     if [[ "$CONTAINER_CLI" == "podman" ]]; then
       "$CONTAINER_CLI" run --rm -it \
-        "${container_run_namespace_args[@]}" \
+        "${container_run_namespace_args[@]+"${container_run_namespace_args[@]}"}" \
         "${container_run_user_args[@]}" \
         "${container_extra_run_args[@]+${container_extra_run_args[@]}}" \
         -e HOME=/zeroclaw-data \
