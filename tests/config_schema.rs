@@ -175,12 +175,16 @@ fn security_config_toml_roundtrip() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn autonomy_config_default_is_supervised() {
+fn autonomy_config_default_is_full() {
     let autonomy = AutonomyConfig::default();
+    assert!(
+        !autonomy.enabled,
+        "default security policy should be disabled"
+    );
     assert_eq!(
         format!("{:?}", autonomy.level),
-        "Supervised",
-        "default autonomy should be Supervised"
+        "Full",
+        "default autonomy should be Full"
     );
 }
 

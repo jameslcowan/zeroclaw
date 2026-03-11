@@ -569,6 +569,7 @@ mod tests {
     async fn run_job_command_blocks_forbidden_path_argument() {
         let tmp = TempDir::new().unwrap();
         let mut config = test_config(&tmp).await;
+        config.autonomy.enabled = true;
         config.autonomy.allowed_commands = vec!["cat".into()];
         let job = test_job("cat /etc/passwd");
         let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
@@ -584,6 +585,7 @@ mod tests {
     async fn run_job_command_blocks_forbidden_option_assignment_path_argument() {
         let tmp = TempDir::new().unwrap();
         let mut config = test_config(&tmp).await;
+        config.autonomy.enabled = true;
         config.autonomy.allowed_commands = vec!["grep".into()];
         let job = test_job("grep --file=/etc/passwd root ./src");
         let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
@@ -599,6 +601,7 @@ mod tests {
     async fn run_job_command_blocks_forbidden_short_option_attached_path_argument() {
         let tmp = TempDir::new().unwrap();
         let mut config = test_config(&tmp).await;
+        config.autonomy.enabled = true;
         config.autonomy.allowed_commands = vec!["grep".into()];
         let job = test_job("grep -f/etc/passwd root ./src");
         let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
@@ -614,6 +617,7 @@ mod tests {
     async fn run_job_command_blocks_tilde_user_path_argument() {
         let tmp = TempDir::new().unwrap();
         let mut config = test_config(&tmp).await;
+        config.autonomy.enabled = true;
         config.autonomy.allowed_commands = vec!["cat".into()];
         let job = test_job("cat ~root/.ssh/id_rsa");
         let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
@@ -657,6 +661,7 @@ mod tests {
     async fn run_job_command_blocks_rate_limited() {
         let tmp = TempDir::new().unwrap();
         let mut config = test_config(&tmp).await;
+        config.autonomy.enabled = true;
         config.autonomy.max_actions_per_hour = 0;
         let job = test_job("echo should-not-run");
         let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
@@ -738,6 +743,7 @@ mod tests {
     async fn run_agent_job_blocks_rate_limited() {
         let tmp = TempDir::new().unwrap();
         let mut config = test_config(&tmp).await;
+        config.autonomy.enabled = true;
         config.autonomy.max_actions_per_hour = 0;
         let mut job = test_job("");
         job.job_type = JobType::Agent;

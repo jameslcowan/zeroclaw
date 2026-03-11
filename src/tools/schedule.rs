@@ -558,6 +558,7 @@ mod tests {
             workspace_dir: tmp.path().join("workspace"),
             config_path: tmp.path().join("config.toml"),
             autonomy: crate::config::AutonomyConfig {
+                enabled: true,
                 level: AutonomyLevel::Full,
                 max_actions_per_hour: 0,
                 ..Default::default()
@@ -600,6 +601,7 @@ mod tests {
             workspace_dir: tmp.path().join("workspace"),
             config_path: tmp.path().join("config.toml"),
             autonomy: crate::config::AutonomyConfig {
+                enabled: true,
                 level: AutonomyLevel::Full,
                 max_actions_per_hour: 1,
                 ..Default::default()
@@ -696,6 +698,7 @@ mod tests {
             config_path: tmp.path().join("config.toml"),
             ..Config::default()
         };
+        config.autonomy.enabled = true;
         config.autonomy.level = AutonomyLevel::Supervised;
         config.autonomy.allowed_commands = vec!["echo".into()];
         std::fs::create_dir_all(&config.workspace_dir).unwrap();
@@ -730,6 +733,7 @@ mod tests {
             config_path: tmp.path().join("config.toml"),
             ..Config::default()
         };
+        config.autonomy.enabled = true;
         config.autonomy.level = AutonomyLevel::Supervised;
         config.autonomy.allowed_commands = vec!["touch".into()];
         std::fs::create_dir_all(&config.workspace_dir).unwrap();

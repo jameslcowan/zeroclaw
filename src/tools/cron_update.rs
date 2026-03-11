@@ -201,6 +201,7 @@ mod tests {
             config_path: tmp.path().join("config.toml"),
             ..Config::default()
         };
+        config.autonomy.enabled = true;
         config.autonomy.allowed_commands = vec!["echo".into()];
         tokio::fs::create_dir_all(&config.workspace_dir)
             .await
@@ -253,6 +254,7 @@ mod tests {
             config_path: tmp.path().join("config.toml"),
             ..Config::default()
         };
+        config.autonomy.enabled = true;
         config.autonomy.level = AutonomyLevel::Supervised;
         config.autonomy.allowed_commands = vec!["echo".into(), "touch".into()];
         std::fs::create_dir_all(&config.workspace_dir).unwrap();
@@ -292,6 +294,7 @@ mod tests {
             config_path: tmp.path().join("config.toml"),
             ..Config::default()
         };
+        config.autonomy.enabled = true;
         config.autonomy.level = AutonomyLevel::Full;
         config.autonomy.max_actions_per_hour = 0;
         std::fs::create_dir_all(&config.workspace_dir).unwrap();

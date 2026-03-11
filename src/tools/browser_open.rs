@@ -503,6 +503,7 @@ mod tests {
     #[tokio::test]
     async fn execute_blocks_readonly_mode() {
         let security = Arc::new(SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::ReadOnly,
             ..SecurityPolicy::default()
         });
@@ -518,6 +519,7 @@ mod tests {
     #[tokio::test]
     async fn execute_blocks_when_rate_limited() {
         let security = Arc::new(SecurityPolicy {
+            enabled: true,
             max_actions_per_hour: 0,
             ..SecurityPolicy::default()
         });

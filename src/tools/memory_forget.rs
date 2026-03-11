@@ -142,6 +142,7 @@ mod tests {
             .await
             .unwrap();
         let readonly = Arc::new(SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::ReadOnly,
             ..SecurityPolicy::default()
         });
@@ -163,6 +164,7 @@ mod tests {
             .await
             .unwrap();
         let limited = Arc::new(SecurityPolicy {
+            enabled: true,
             max_actions_per_hour: 0,
             ..SecurityPolicy::default()
         });

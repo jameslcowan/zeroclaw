@@ -1997,9 +1997,14 @@ pub struct BuiltinHooksConfig {
 ///
 /// Controls what the agent is allowed to do: shell commands, filesystem access,
 /// risk approval gates, and per-policy budgets.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AutonomyConfig {
-    /// Autonomy level: `read_only`, `supervised` (default), or `full`.
+    /// Master toggle for shell security policy enforcement.
+    /// When false (default), command restrictions, path blocks, and rate limits are disabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Autonomy level: `read_only`, `supervised`, or `full` (default).
     pub level: AutonomyLevel,
     /// Restrict absolute filesystem paths to workspace-relative references. Default: `true`.
     /// Resolved paths outside the workspace still require `allowed_roots`.
@@ -2070,7 +2075,8 @@ fn is_valid_env_var_name(name: &str) -> bool {
 impl Default for AutonomyConfig {
     fn default() -> Self {
         Self {
-            level: AutonomyLevel::Supervised,
+            enabled: false,
+            level: AutonomyLevel::Full,
             workspace_only: true,
             allowed_commands: vec![
                 "git".into(),
@@ -4546,6 +4552,19 @@ impl Config {
             }
         }
 
+        // Security policy master toggle: ZEROCLAW_SECURITY_POLICY
+        if let Ok(flag) = std::env::var("ZEROCLAW_SECURITY_POLICY") {
+            if !flag.trim().is_empty() {
+                match flag.trim().to_ascii_lowercase().as_str() {
+                    "1" | "true" | "yes" | "on" => self.autonomy.enabled = true,
+                    "0" | "false" | "no" | "off" => self.autonomy.enabled = false,
+                    _ => tracing::warn!(
+                        "Ignoring invalid ZEROCLAW_SECURITY_POLICY (valid: 1|0|true|false|yes|no|on|off)"
+                    ),
+                }
+            }
+        }
+
         // Gateway port: ZEROCLAW_GATEWAY_PORT or PORT
         if let Ok(port_str) =
             std::env::var("ZEROCLAW_GATEWAY_PORT").or_else(|_| std::env::var("PORT"))
@@ -5000,7 +5019,8 @@ mod tests {
     #[test]
     async fn autonomy_config_default() {
         let a = AutonomyConfig::default();
-        assert_eq!(a.level, AutonomyLevel::Supervised);
+        assert!(!a.enabled);
+        assert_eq!(a.level, AutonomyLevel::Full);
         assert!(a.workspace_only);
         assert!(a.allowed_commands.contains(&"git".to_string()));
         assert!(a.allowed_commands.contains(&"cargo".to_string()));
@@ -5131,6 +5151,7 @@ default_temperature = 0.7
                 ..ObservabilityConfig::default()
             },
             autonomy: AutonomyConfig {
+                enabled: false,
                 level: AutonomyLevel::Full,
                 workspace_only: false,
                 allowed_commands: vec!["docker".into()],
@@ -5256,7 +5277,7 @@ default_temperature = 0.7
         assert!(parsed.default_provider.is_none());
         assert_eq!(parsed.observability.backend, "none");
         assert_eq!(parsed.observability.runtime_trace_mode, "none");
-        assert_eq!(parsed.autonomy.level, AutonomyLevel::Supervised);
+        assert_eq!(parsed.autonomy.level, AutonomyLevel::Full);
         assert_eq!(parsed.runtime.kind, "native");
         assert!(!parsed.heartbeat.enabled);
         assert!(parsed.channels_config.cli);

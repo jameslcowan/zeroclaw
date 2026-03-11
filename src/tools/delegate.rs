@@ -850,6 +850,7 @@ mod tests {
     #[tokio::test]
     async fn delegation_blocked_in_readonly_mode() {
         let readonly = Arc::new(SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::ReadOnly,
             ..SecurityPolicy::default()
         });
@@ -869,6 +870,7 @@ mod tests {
     #[tokio::test]
     async fn delegation_blocked_when_rate_limited() {
         let limited = Arc::new(SecurityPolicy {
+            enabled: true,
             max_actions_per_hour: 0,
             ..SecurityPolicy::default()
         });

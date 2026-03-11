@@ -214,6 +214,7 @@ mod tests {
 
     fn test_security(autonomy: AutonomyLevel) -> Arc<SecurityPolicy> {
         Arc::new(SecurityPolicy {
+            enabled: true,
             autonomy,
             workspace_dir: std::env::temp_dir(),
             ..SecurityPolicy::default()
@@ -389,6 +390,7 @@ mod tests {
 
     fn test_security_with_env_cmd() -> Arc<SecurityPolicy> {
         Arc::new(SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::Supervised,
             workspace_dir: std::env::temp_dir(),
             allowed_commands: vec!["env".into(), "echo".into()],
@@ -398,6 +400,7 @@ mod tests {
 
     fn test_security_with_env_passthrough(vars: &[&str]) -> Arc<SecurityPolicy> {
         Arc::new(SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::Supervised,
             workspace_dir: std::env::temp_dir(),
             allowed_commands: vec!["env".into()],
@@ -524,6 +527,7 @@ mod tests {
     #[tokio::test]
     async fn shell_requires_approval_for_medium_risk_command() {
         let security = Arc::new(SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::Supervised,
             allowed_commands: vec!["touch".into()],
             workspace_dir: std::env::temp_dir(),
@@ -602,6 +606,7 @@ mod tests {
     #[tokio::test]
     async fn shell_blocks_rate_limited() {
         let security = Arc::new(SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::Supervised,
             max_actions_per_hour: 0,
             workspace_dir: std::env::temp_dir(),
@@ -644,6 +649,7 @@ mod tests {
     #[tokio::test]
     async fn shell_record_action_budget_exhaustion() {
         let security = Arc::new(SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::Full,
             max_actions_per_hour: 1,
             workspace_dir: std::env::temp_dir(),

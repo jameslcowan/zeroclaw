@@ -660,6 +660,7 @@ mod tests {
 
     fn test_security(workspace: PathBuf) -> Arc<SecurityPolicy> {
         Arc::new(SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::Supervised,
             workspace_dir: workspace,
             ..SecurityPolicy::default()
@@ -672,6 +673,7 @@ mod tests {
         max_actions_per_hour: u32,
     ) -> Arc<SecurityPolicy> {
         Arc::new(SecurityPolicy {
+            enabled: true,
             autonomy,
             workspace_dir: workspace,
             max_actions_per_hour,

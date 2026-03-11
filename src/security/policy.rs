@@ -78,8 +78,11 @@ impl Clone for ActionTracker {
 }
 
 /// Security policy enforced on all tool executions
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct SecurityPolicy {
+    /// When false, command restrictions, path blocks, and rate limits are bypassed.
+    pub enabled: bool,
     pub autonomy: AutonomyLevel,
     pub workspace_dir: PathBuf,
     pub workspace_only: bool,
@@ -97,7 +100,8 @@ pub struct SecurityPolicy {
 impl Default for SecurityPolicy {
     fn default() -> Self {
         Self {
-            autonomy: AutonomyLevel::Supervised,
+            enabled: false,
+            autonomy: AutonomyLevel::Full,
             workspace_dir: PathBuf::from("."),
             workspace_only: true,
             allowed_commands: vec![
@@ -673,6 +677,9 @@ impl SecurityPolicy {
         command: &str,
         approved: bool,
     ) -> Result<CommandRiskLevel, String> {
+        if !self.enabled {
+            return Ok(CommandRiskLevel::Low);
+        }
         if !self.is_command_allowed(command) {
             return Err(format!("Command not allowed by security policy: {command}"));
         }
@@ -824,6 +831,9 @@ impl SecurityPolicy {
     /// This is best-effort token parsing for shell commands and is intended
     /// as a safety gate before command execution.
     pub fn forbidden_path_argument(&self, command: &str) -> Option<String> {
+        if !self.enabled {
+            return None;
+        }
         let forbidden_candidate = |raw: &str| {
             let candidate = strip_wrapping_quotes(raw).trim();
             if candidate.is_empty() || candidate.contains("://") {
@@ -1033,12 +1043,18 @@ impl SecurityPolicy {
     /// Record an action and check if the rate limit has been exceeded.
     /// Returns `true` if the action is allowed, `false` if rate-limited.
     pub fn record_action(&self) -> bool {
+        if !self.enabled {
+            return true;
+        }
         let count = self.tracker.record();
         count <= self.max_actions_per_hour as usize
     }
 
     /// Check if the rate limit would be exceeded without recording.
     pub fn is_rate_limited(&self) -> bool {
+        if !self.enabled {
+            return false;
+        }
         self.tracker.count() >= self.max_actions_per_hour as usize
     }
 
@@ -1048,6 +1064,7 @@ impl SecurityPolicy {
         workspace_dir: &Path,
     ) -> Self {
         Self {
+            enabled: autonomy_config.enabled,
             autonomy: autonomy_config.level,
             workspace_dir: workspace_dir.to_path_buf(),
             workspace_only: autonomy_config.workspace_only,
@@ -1079,12 +1096,18 @@ impl SecurityPolicy {
 mod tests {
     use super::*;
 
+    /// Returns an **enabled** policy with supervised autonomy for enforcement tests.
     fn default_policy() -> SecurityPolicy {
-        SecurityPolicy::default()
+        SecurityPolicy {
+            enabled: true,
+            autonomy: AutonomyLevel::Supervised,
+            ..SecurityPolicy::default()
+        }
     }
 
     fn readonly_policy() -> SecurityPolicy {
         SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::ReadOnly,
             ..SecurityPolicy::default()
         }
@@ -1092,6 +1115,7 @@ mod tests {
 
     fn full_policy() -> SecurityPolicy {
         SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::Full,
             ..SecurityPolicy::default()
         }
@@ -1218,6 +1242,7 @@ mod tests {
     #[test]
     fn allowlist_supports_wildcard_entry() {
         let p = SecurityPolicy {
+            enabled: true,
             allowed_commands: vec!["*".into()],
             ..SecurityPolicy::default()
         };
@@ -1309,6 +1334,7 @@ mod tests {
     #[test]
     fn validate_command_requires_approval_for_medium_risk() {
         let p = SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::Supervised,
             require_approval_for_medium_risk: true,
             allowed_commands: vec!["touch".into()],
@@ -1326,6 +1352,7 @@ mod tests {
     #[test]
     fn validate_command_blocks_high_risk_by_default() {
         let p = SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::Supervised,
             allowed_commands: vec!["rm".into()],
             ..SecurityPolicy::default()
@@ -1339,6 +1366,7 @@ mod tests {
     #[test]
     fn validate_command_full_mode_skips_medium_risk_approval_gate() {
         let p = SecurityPolicy {
+            enabled: true,
             autonomy: AutonomyLevel::Full,
             require_approval_for_medium_risk: true,
             allowed_commands: vec!["touch".into()],
@@ -1424,6 +1452,7 @@ mod tests {
     #[test]
     fn from_config_maps_all_fields() {
         let autonomy_config = crate::config::AutonomyConfig {
+            enabled: true,
             level: AutonomyLevel::Full,
             workspace_only: false,
             allowed_commands: vec!["docker".into()],
@@ -1438,6 +1467,7 @@ mod tests {
         let workspace = PathBuf::from("/tmp/test-workspace");
         let policy = SecurityPolicy::from_config(&autonomy_config, &workspace);
 
+        assert!(policy.enabled);
         assert_eq!(policy.autonomy, AutonomyLevel::Full);
         assert!(!policy.workspace_only);
         assert_eq!(policy.allowed_commands, vec!["docker"]);
@@ -1482,7 +1512,8 @@ mod tests {
     #[test]
     fn default_policy_has_sane_values() {
         let p = SecurityPolicy::default();
-        assert_eq!(p.autonomy, AutonomyLevel::Supervised);
+        assert!(!p.enabled);
+        assert_eq!(p.autonomy, AutonomyLevel::Full);
         assert!(p.workspace_only);
         assert!(!p.allowed_commands.is_empty());
         assert!(!p.forbidden_paths.is_empty());
@@ -1513,6 +1544,7 @@ mod tests {
     #[test]
     fn record_action_allows_within_limit() {
         let p = SecurityPolicy {
+            enabled: true,
             max_actions_per_hour: 5,
             ..SecurityPolicy::default()
         };
@@ -1524,6 +1556,7 @@ mod tests {
     #[test]
     fn record_action_blocks_over_limit() {
         let p = SecurityPolicy {
+            enabled: true,
             max_actions_per_hour: 3,
             ..SecurityPolicy::default()
         };
@@ -1536,6 +1569,7 @@ mod tests {
     #[test]
     fn is_rate_limited_reflects_count() {
         let p = SecurityPolicy {
+            enabled: true,
             max_actions_per_hour: 2,
             ..SecurityPolicy::default()
         };
@@ -1901,6 +1935,7 @@ mod tests {
     #[test]
     fn rate_limit_exactly_at_boundary() {
         let p = SecurityPolicy {
+            enabled: true,
             max_actions_per_hour: 1,
             ..SecurityPolicy::default()
         };
@@ -1912,6 +1947,7 @@ mod tests {
     #[test]
     fn rate_limit_zero_blocks_everything() {
         let p = SecurityPolicy {
+            enabled: true,
             max_actions_per_hour: 0,
             ..SecurityPolicy::default()
         };
@@ -1921,6 +1957,7 @@ mod tests {
     #[test]
     fn rate_limit_high_allows_many() {
         let p = SecurityPolicy {
+            enabled: true,
             max_actions_per_hour: 10000,
             ..SecurityPolicy::default()
         };
@@ -2334,5 +2371,37 @@ mod tests {
             !policy.is_path_allowed("subdir%2f..%2f..%2fetc"),
             "URL-encoded parent dir traversal must be blocked"
         );
+    }
+
+    // ── Disabled policy (enabled=false) ──────────────────────
+
+    #[test]
+    fn disabled_policy_allows_any_command() {
+        let p = SecurityPolicy {
+            enabled: false,
+            ..SecurityPolicy::default()
+        };
+        let result = p.validate_command_execution("rm -rf /", false);
+        assert_eq!(result.unwrap(), CommandRiskLevel::Low);
+    }
+
+    #[test]
+    fn disabled_policy_allows_forbidden_paths() {
+        let p = SecurityPolicy {
+            enabled: false,
+            ..SecurityPolicy::default()
+        };
+        assert!(p.forbidden_path_argument("cat /etc/passwd").is_none());
+    }
+
+    #[test]
+    fn disabled_policy_skips_rate_limit() {
+        let p = SecurityPolicy {
+            enabled: false,
+            max_actions_per_hour: 0,
+            ..SecurityPolicy::default()
+        };
+        assert!(!p.is_rate_limited());
+        assert!(p.record_action());
     }
 }

@@ -223,6 +223,7 @@ mod tests {
 
     fn test_security(level: AutonomyLevel, max_actions_per_hour: u32) -> Arc<SecurityPolicy> {
         Arc::new(SecurityPolicy {
+            enabled: true,
             autonomy: level,
             max_actions_per_hour,
             workspace_dir: std::env::temp_dir(),
